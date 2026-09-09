@@ -16,7 +16,10 @@ const { syncRecentOrders } = require("./services/woocommerce");
 
 const app = express();
 
-app.use(cors({ origin: (process.env.CORS_ORIGIN || "*").split(",") }));
+const corsOrigin = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(",").map((o) => o.trim())
+  : "*";
+app.use(cors({ origin: corsOrigin }));
 
 // The webhook route needs the raw request body to verify WooCommerce's
 // HMAC signature, so it's mounted BEFORE express.json() and given its

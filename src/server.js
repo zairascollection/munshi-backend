@@ -18,7 +18,7 @@ const app = express();
 
 const corsOrigin = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(",").map((o) => o.trim())
-  : "*";
+  : ["https://munshi-frontend-gilt.vercel.app", "http://localhost:3000", "http://127.0.0.1:3000"];
 
 // Manual CORS handling (instead of the `cors` package) so preflight
 // (OPTIONS) requests are answered directly by this middleware, with no
@@ -27,8 +27,9 @@ app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (corsOrigin === "*" || (Array.isArray(corsOrigin) && origin && corsOrigin.includes(origin))) {
     res.header("Access-Control-Allow-Origin", origin || "*");
+    res.header("Access-Control-Allow-Credentials", "true");
   }
-  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS");
   res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, x-wc-webhook-signature, x-wc-webhook-topic, x-wc-webhook-delivery-id");
   if (req.method === "OPTIONS") {
     return res.sendStatus(204);

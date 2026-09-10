@@ -1,6 +1,5 @@
 require("dotenv").config();
 const express = require("express");
-const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
 const bcrypt = require("bcryptjs");
@@ -20,7 +19,22 @@ const app = express();
 const corsOrigin = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(",").map((o) => o.trim())
   : "*";
-app.use(cors({ origin: corsOrigin }));
+
+// Manual CORS handling (instead of the `cors` package) so preflight
+// (OPTIONS) requests are answered directly by this middleware, with no
+// dependency on how any library internally matches request methods.
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (corsOrigin === "*" || (Array.isArray(corsOrigin) && origin && corsOrigin.includes(origin))) {
+    res.header("Access-Control-Allow-Origin", origin || "*");
+  }
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, x-wc-webhook-signature, x-wc-webhook-topic, x-wc-webhook-delivery-id");
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204);
+  }
+  next();
+});
 
 // The webhook route needs the raw request body to verify WooCommerce's
 // HMAC signature, so it's mounted BEFORE express.json() and given its

@@ -1,8 +1,7 @@
 const pool = require("../db/pool");
 
 /**
- * Fetch YITH affiliates from WordPress REST API
- * NO authentication required - open endpoint
+ * Fetch YITH affiliates from standalone WordPress endpoint
  */
 async function fetchYithAffiliates() {
   if (!process.env.YITH_SYNC_URL) {
@@ -11,31 +10,41 @@ async function fetchYithAffiliates() {
   }
 
   try {
+    console.log("Fetching affiliates from:", process.env.YITH_SYNC_URL);
+    
     const res = await fetch(process.env.YITH_SYNC_URL, {
       method: "GET",
       headers: {
         "Content-Type": "application/json",
-        // No auth header needed
       },
+      timeout: 15000,
     });
 
     if (!res.ok) {
-      throw new Error(`YITH endpoint returned ${res.status}: ${await res.text()}`);
+      const text = await res.text();
+      console.error("Response status:", res.status);
+      console.error("Response body:", text);
+      throw new Error(`Endpoint returned ${res.status}: ${text}`);
     }
 
     const data = await res.json();
-    return Array.isArray(data) ? data : [];
+    console.log(`✅ Fetched ${Array.isArray(data) ? data.length : 0} affiliates`);
+    
+    if (!Array.isArray(data)) {
+      throw new Error("Response is not an array");
+    }
+    
+    return data;
   } catch (err) {
-    console.error("Error fetching YITH affiliates:", err.message);
+    console.error("❌ Error fetching YITH affiliates:", err.message);
     throw err;
   }
 }
 
 /**
- * Upsert a single YITH affiliate into Munshi database
+ * Upsert a single affiliate into database
  */
 async function upsertYithAffiliate(a) {
-  // Calculate commission status
   const commission = Number(a.commission || 0);
   const payment = commission > 0 ? "Pending" : "Paid";
 
@@ -55,7 +64,7 @@ async function upsertYithAffiliate(a) {
          updated_at = now()
        RETURNING *`,
       [
-        a.name || a.email,
+        a.name || a.email || "Unknown",
         a.email || "",
         a.platform || "Website",
         Number(a.rate || 10),
@@ -63,43 +72,55 @@ async function upsertYithAffiliate(a) {
         commission,
         a.status || "Active",
         payment,
-        a.id || a.affiliate_id || Math.random(), // Unique ID
+        a.id || a.affiliate_id || `aff_${Date.now()}_${Math.random()}`,
       ]
     );
 
     return rows[0];
   } catch (err) {
     console.error("Error upserting affiliate:", err.message);
-    throw err;
+    return null;
   }
 }
 
 /**
- * Sync all YITH affiliates from WordPress to Munshi database
+ * Sync all affiliates
  */
 async function syncYithAffiliates() {
   try {
+    console.log("🔄 Starting affiliate sync...");
+    
     const list = await fetchYithAffiliates();
 
     if (!list || list.length === 0) {
-      console.log("No affiliates to sync");
-      return { synced: 0, skipped: false, message: "No affiliates found" };
+      console.log("⚠️ No affiliates to sync");
+      return { 
+        synced: 0, 
+        skipped: false, 
+        message: "No affiliates found" 
+      };
     }
+
+    console.log(`📊 Syncing ${list.length} affiliates...`);
 
     let synced = 0;
     let errors = 0;
 
     for (const affiliate of list) {
       try {
-        await upsertYithAffiliate(affiliate);
-        synced++;
+        const result = await upsertYithAffiliate(affiliate);
+        if (result) {
+          synced++;
+          console.log(`  ✅ ${affiliate.name}`);
+        }
       } catch (err) {
-        console.error(`Failed to sync affiliate ${affiliate.name}:`, err.message);
         errors++;
+        console.error(`  ❌ Failed to sync ${affiliate.name}:`, err.message);
       }
     }
 
-    console.log(`Affiliate sync complete: ${synced} synced, ${errors} errors`);
+    console.log(`✅ Sync complete: ${synced} synced, ${errors} errors`);
+    
     return {
       synced,
       failed: errors,
@@ -107,8 +128,13 @@ async function syncYithAffiliates() {
       message: `Synced ${synced} affiliates${errors > 0 ? `, ${errors} failed` : ""}`,
     };
   } catch (err) {
-    console.error("Affiliate sync failed:", err.message);
-    throw err;
+    console.error("❌ Affiliate sync failed:", err.message);
+    return {
+      synced: 0,
+      failed: 0,
+      skipped: false,
+      error: err.message,
+    };
   }
 }
 

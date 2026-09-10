@@ -13,6 +13,7 @@ const financeRoutes = require("./routes/finance");
 const { inventoryRouter, employeesRouter, affiliatesRouter, accountsRouter, expensesRouter } = require("./routes/resources");
 const { requireAuth, requireResourceAccess } = require("./middleware/auth");
 const { syncRecentOrders } = require("./services/woocommerce");
+const { syncYithAffiliates } = require("./services/yith");
 
 const app = express();
 
@@ -26,8 +27,9 @@ app.use(cors({ origin: corsOrigin }));
 // own raw body parser, scoped to just this path.
 app.use("/webhooks", express.raw({ type: "application/json" }), webhookRoutes);
 
-// Everything else gets normal JSON body parsing.
-app.use(express.json());
+// Everything else gets normal JSON body parsing. Limit raised from the
+// 100kb default since inventory photos are sent as base64 in the JSON body.
+app.use(express.json({ limit: "5mb" }));
 
 app.get("/health", (req, res) => res.json({ ok: true }));
 
@@ -45,10 +47,29 @@ app.use("/finance", financeRoutes);
 app.post("/sync/woocommerce", requireAuth, requireResourceAccess("finance"), async (req, res) => {
   try {
     const count = await syncRecentOrders({ days: req.body?.days });
-    res.json({ ok: true, ordersSynced: count });
+    let affiliates = null;
+    try {
+      affiliates = await syncYithAffiliates();
+    } catch (err) {
+      console.error("Affiliate sync failed (orders sync still succeeded):", err);
+    }
+    res.json({ ok: true, ordersSynced: count, affiliates });
   } catch (err) {
     console.error("Manual sync failed:", err);
     res.status(502).json({ error: "WooCommerce sync failed", detail: err.message });
+  }
+});
+
+app.post("/sync/affiliates", requireAuth, requireResourceAccess("affiliates"), async (req, res) => {
+  try {
+    const result = await syncYithAffiliates();
+    if (result.skipped) {
+      return res.status(400).json({ error: "YITH_SYNC_URL / YITH_SYNC_SECRET not configured yet" });
+    }
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error("Affiliate sync failed:", err);
+    res.status(502).json({ error: "Affiliate sync failed", detail: err.message });
   }
 });
 

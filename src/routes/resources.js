@@ -10,7 +10,7 @@ const inventoryRouter = buildCrudRouter({
 const employeesRouter = buildCrudRouter({
   table: "employees",
   resource: "employees",
-  columns: ["name", "role", "salary", "phone", "joined", "status", "account_id"],
+  columns: ["name", "role", "salary", "phone", "joined", "status", "account_id", "image"],
   ownerOnlyFields: ["salary"],
 });
 

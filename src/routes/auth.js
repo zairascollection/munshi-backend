@@ -86,4 +86,41 @@ router.delete("/users/:id", requireAuth, requireResourceAccess("users"), async (
   res.status(204).end();
 });
 
+// GET /auth/profile  — get current user profile
+router.get("/profile", requireAuth, async (req, res) => {
+  const { rows } = await pool.query(
+    "SELECT id, name, email, role, created_at FROM users WHERE id = $1",
+    [req.user.id]
+  );
+  if (!rows[0]) return res.status(404).json({ error: "User not found" });
+  res.json({ user: rows[0] });
+});
+
+// POST /auth/change-password  — user changes own password
+router.post("/change-password", requireAuth, async (req, res) => {
+  try {
+    const { oldPassword, newPassword } = req.body || {};
+    if (!oldPassword || !newPassword) {
+      return res.status(400).json({ error: "Old and new password required" });
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: "New password must be at least 6 characters" });
+    }
+
+    const { rows } = await pool.query("SELECT password_hash FROM users WHERE id = $1", [req.user.id]);
+    if (rows.length === 0) return res.status(404).json({ error: "User not found" });
+
+    const passwordMatch = await bcrypt.compare(oldPassword, rows[0].password_hash);
+    if (!passwordMatch) return res.status(401).json({ error: "Current password is incorrect" });
+
+    const newPasswordHash = await bcrypt.hash(newPassword, 10);
+    await pool.query("UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2", [newPasswordHash, req.user.id]);
+
+    res.json({ ok: true, message: "Password changed successfully" });
+  } catch (err) {
+    console.error("Change password error:", err);
+    res.status(500).json({ error: "Failed to change password" });
+  }
+});
+
 module.exports = router;

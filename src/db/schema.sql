@@ -11,7 +11,8 @@ CREATE TABLE IF NOT EXISTS users (
   email TEXT UNIQUE NOT NULL,
   password_hash TEXT NOT NULL,
   role TEXT NOT NULL CHECK (role IN ('owner', 'staff')),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- ---------- Accounts ----------
@@ -90,6 +91,7 @@ CREATE TABLE IF NOT EXISTS employees (
   joined DATE,
   status TEXT NOT NULL DEFAULT 'Pending' CHECK (status IN ('Paid', 'Pending')),
   account_id UUID REFERENCES accounts(id),
+  image TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

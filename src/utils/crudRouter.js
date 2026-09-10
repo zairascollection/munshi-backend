@@ -1,15 +1,21 @@
 const express = require("express");
 const pool = require("../db/pool");
 const { requireAuth, requireResourceAccess, requireDeletePermission } = require("../middleware/auth");
-const { scrubForRole } = require("./permissions");
+const { scrubForRole, isOwner } = require("./permissions");
 
 // Builds a basic REST router for a table: GET list, GET one, POST, PUT, DELETE.
 // `columns` is the ordered list of DB column names accepted on create/update
 // (excluding id/created_at/updated_at, which are handled automatically).
-function buildCrudRouter({ table, resource, columns, ownerOnly = false }) {
+// `ownerOnlyFields` are excluded from POST/PUT for non-owners entirely (not
+// just set to blank) so a staff edit can never overwrite a cost/salary-type
+// field they can't even see with an empty value.
+function buildCrudRouter({ table, resource, columns, ownerOnly = false, ownerOnlyFields = [] }) {
   const router = express.Router();
   router.use(requireAuth);
   if (ownerOnly) router.use(requireResourceAccess(resource));
+
+  const writableColumns = (req) =>
+    isOwner(req.user) ? columns : columns.filter((c) => !ownerOnlyFields.includes(c));
 
   router.get("/", async (req, res) => {
     const { rows } = await pool.query(`SELECT * FROM ${table} ORDER BY created_at DESC`);
@@ -23,20 +29,22 @@ function buildCrudRouter({ table, resource, columns, ownerOnly = false }) {
   });
 
   router.post("/", async (req, res) => {
-    const values = columns.map((c) => req.body[c]);
-    const placeholders = columns.map((_, i) => `$${i + 1}`).join(", ");
+    const cols = writableColumns(req);
+    const values = cols.map((c) => req.body[c]);
+    const placeholders = cols.map((_, i) => `$${i + 1}`).join(", ");
     const { rows } = await pool.query(
-      `INSERT INTO ${table} (${columns.join(", ")}) VALUES (${placeholders}) RETURNING *`,
+      `INSERT INTO ${table} (${cols.join(", ")}) VALUES (${placeholders}) RETURNING *`,
       values
     );
     res.status(201).json(scrubForRole(req.user, resource, rows[0]));
   });
 
   router.put("/:id", async (req, res) => {
-    const sets = columns.map((c, i) => `${c} = $${i + 1}`).join(", ");
-    const values = columns.map((c) => req.body[c]);
+    const cols = writableColumns(req);
+    const sets = cols.map((c, i) => `${c} = $${i + 1}`).join(", ");
+    const values = cols.map((c) => req.body[c]);
     const { rows } = await pool.query(
-      `UPDATE ${table} SET ${sets}, updated_at = now() WHERE id = $${columns.length + 1} RETURNING *`,
+      `UPDATE ${table} SET ${sets}, updated_at = now() WHERE id = $${cols.length + 1} RETURNING *`,
       [...values, req.params.id]
     );
     if (!rows[0]) return res.status(404).json({ error: "Not found" });

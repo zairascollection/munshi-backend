@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS affiliates (
   status TEXT NOT NULL DEFAULT 'Active' CHECK (status IN ('Active', 'Inactive')),
   payment TEXT NOT NULL DEFAULT 'Pending' CHECK (payment IN ('Paid', 'Pending')),
   account_id UUID REFERENCES accounts(id),
+  wc_affiliate_id BIGINT UNIQUE, -- null for manually-entered affiliates; set for ones synced from YITH
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

@@ -50,7 +50,6 @@ function mapWooOrderToMunshi(wcOrder) {
     product: lineItemNames,
     qty: qty || 1,
     sell,
-    cost: 0, // WooCommerce has no COGS field — fill in from inventory match, or manually later
     courier: null, // manual for now, per Phase 1 scope
     tracking: null,
     status: resolveStatus(wcOrder.status),
@@ -65,13 +64,38 @@ function mapWooOrderToMunshi(wcOrder) {
   };
 }
 
+// Matches each line item to an inventory row by SKU (case/whitespace
+// insensitive) and sums cost * quantity. Line items with no SKU, or no
+// matching inventory row, contribute 0 — same as before matching existed —
+// so partially-stocked orders still get a partial, useful cost figure
+// rather than failing outright.
+async function computeCostFromLineItems(lineItems) {
+  let totalCost = 0;
+  let matched = 0;
+  for (const li of lineItems || []) {
+    const sku = (li.sku || "").trim();
+    if (!sku) continue;
+    const { rows } = await pool.query(
+      "SELECT cost FROM inventory WHERE lower(sku) = lower($1) LIMIT 1",
+      [sku]
+    );
+    if (rows[0]) {
+      totalCost += Number(rows[0].cost) * Number(li.quantity || 1);
+      matched += 1;
+    }
+  }
+  return { totalCost, matched, total: (lineItems || []).length };
+}
+
 // Upsert by wc_order_id. Never overwrites amount_paid/status if the order
 // was already hand-edited in Munshi in a way that would look like data
 // loss — instead this always trusts WooCommerce as the source of truth
 // for orders that originated there. If the store owner wants Munshi edits
 // (e.g. marking Shipped by hand) to stick, switch this to a partial update.
 async function upsertWooOrder(wcOrder) {
-  const m = mapWooOrderToMunshi(wcOrder);
+  const mapped = mapWooOrderToMunshi(wcOrder);
+  const { totalCost } = await computeCostFromLineItems(wcOrder.line_items);
+  const m = { ...mapped, cost: totalCost };
   const columns = Object.keys(m);
   const values = Object.values(m);
   const placeholders = columns.map((_, i) => `$${i + 1}`).join(", ");

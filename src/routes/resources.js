@@ -4,12 +4,14 @@ const inventoryRouter = buildCrudRouter({
   table: "inventory",
   resource: "inventory",
   columns: ["name", "sku", "category", "quantity", "reorder", "cost", "price", "image", "wc_product_id", "wc_variation_id"],
+  ownerOnlyFields: ["cost"],
 });
 
 const employeesRouter = buildCrudRouter({
   table: "employees",
   resource: "employees",
   columns: ["name", "role", "salary", "phone", "joined", "status", "account_id"],
+  ownerOnlyFields: ["salary"],
 });
 
 const affiliatesRouter = buildCrudRouter({

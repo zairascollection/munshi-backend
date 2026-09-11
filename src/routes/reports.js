@@ -10,9 +10,8 @@ router.get("/monthly", requireAuth, requireResourceAccess("finance"), async (req
   try {
     const month = req.query.month || new Date().toISOString().slice(0, 7); // YYYY-MM format
     const monthStart = `${month}-01`;
-    const monthEnd = new Date(year, parseInt(month.split('-')[1]), 0).toISOString().split('T')[0];
 
-    // Parse year and month
+    // Parse year and month first — needed before computing the month's last day
     const [year, monthNum] = month.split('-').map(Number);
     const lastDay = new Date(year, monthNum, 0).getDate();
     const actualEnd = `${month}-${String(lastDay).padStart(2, '0')}`;
@@ -103,7 +102,7 @@ router.get("/monthly", requireAuth, requireResourceAccess("finance"), async (req
         margin: totalRevenue > 0 ? ((netProfit / totalRevenue) * 100).toFixed(2) : 0,
       },
       affiliates: {
-        totalAffiliates: parseInt(affiliateStats[0].total_affiliate_affiliates || 0),
+        totalAffiliates: parseInt(affiliateStats[0].total_affiliates || 0),
         totalSales: parseFloat(affiliateStats[0].total_affiliate_sales || 0),
         totalCommission: parseFloat(affiliateStats[0].total_affiliate_commission || 0),
         pendingCommission,

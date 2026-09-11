@@ -1,141 +1,53 @@
 const pool = require("../db/pool");
 
-/**
- * Fetch YITH affiliates from standalone WordPress endpoint
- */
+// YITH WooCommerce Affiliates doesn't expose a public REST API the way
+// WooCommerce core does, so this relies on a small custom endpoint added
+// to the WordPress site (see /wordpress-snippets/munshi-yith-bridge.php in
+// this project) that reads YITH's own database tables and returns a plain
+// JSON summary per affiliate. This is best-effort: exact field names in
+// YITH's tables can vary slightly by plugin version, so double-check the
+// numbers here against YITH's own admin screens after the first sync.
 async function fetchYithAffiliates() {
-  if (!process.env.YITH_SYNC_URL) {
-    console.log("YITH_SYNC_URL not configured - skipping affiliate sync");
-    return null;
+  if (!process.env.YITH_SYNC_URL || !process.env.YITH_SYNC_SECRET) {
+    return null; // not configured — caller should skip silently
   }
-
-  try {
-    console.log("Fetching affiliates from:", process.env.YITH_SYNC_URL);
-    
-    const res = await fetch(process.env.YITH_SYNC_URL, {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      timeout: 15000,
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      console.error("Response status:", res.status);
-      console.error("Response body:", text);
-      throw new Error(`Endpoint returned ${res.status}: ${text}`);
-    }
-
-    const data = await res.json();
-    console.log(`✅ Fetched ${Array.isArray(data) ? data.length : 0} affiliates`);
-    
-    if (!Array.isArray(data)) {
-      throw new Error("Response is not an array");
-    }
-    
-    return data;
-  } catch (err) {
-    console.error("❌ Error fetching YITH affiliates:", err.message);
-    throw err;
-  }
+  const res = await fetch(process.env.YITH_SYNC_URL, {
+    headers: { "x-munshi-secret": process.env.YITH_SYNC_SECRET },
+  });
+  if (!res.ok) throw new Error(`YITH bridge error ${res.status}: ${await res.text()}`);
+  return res.json();
 }
 
-/**
- * Upsert a single affiliate into database
- */
+// Each YITH affiliate becomes one Munshi affiliate row (upserted by
+// wc_affiliate_id). `commission` mirrors Munshi's existing single-total
+// model: it's set to the sum of pending + paid commission, and the
+// Paid/Pending flag reflects whether anything is still owed — matching
+// how the manual Affiliates panel already works, just filled in automatically.
 async function upsertYithAffiliate(a) {
-  const commission = Number(a.commission || 0);
-  const payment = commission > 0 ? "Pending" : "Paid";
+  const commission = Number(a.commission_pending || 0) + Number(a.commission_paid || 0);
+  const payment = Number(a.commission_pending || 0) > 0 ? "Pending" : "Paid";
 
-  try {
-    const { rows } = await pool.query(
-      `INSERT INTO affiliates 
-       (name, email, platform, rate, sales, commission, status, payment, wc_affiliate_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       ON CONFLICT (wc_affiliate_id)
-       DO UPDATE SET 
-         name = EXCLUDED.name,
-         email = EXCLUDED.email,
-         rate = EXCLUDED.rate,
-         sales = EXCLUDED.sales,
-         commission = EXCLUDED.commission,
-         payment = EXCLUDED.payment,
-         updated_at = now()
-       RETURNING *`,
-      [
-        a.name || a.email || "Unknown",
-        a.email || "",
-        a.platform || "Website",
-        Number(a.rate || 10),
-        Number(a.sales || 0),
-        commission,
-        a.status || "Active",
-        payment,
-        a.id || a.affiliate_id || `aff_${Date.now()}_${Math.random()}`,
-      ]
-    );
-
-    return rows[0];
-  } catch (err) {
-    console.error("Error upserting affiliate:", err.message);
-    return null;
-  }
+  const { rows } = await pool.query(
+    `INSERT INTO affiliates (name, platform, rate, sales, commission, status, payment, wc_affiliate_id)
+     VALUES ($1, 'Website', $2, $3, $4, 'Active', $5, $6)
+     ON CONFLICT (wc_affiliate_id)
+     DO UPDATE SET rate = EXCLUDED.rate, sales = EXCLUDED.sales, commission = EXCLUDED.commission,
+                    payment = EXCLUDED.payment, updated_at = now()
+     RETURNING *`,
+    [a.name, Number(a.rate || 0), Number(a.sales || 0), commission, payment, a.affiliate_id]
+  );
+  return rows[0];
 }
 
-/**
- * Sync all affiliates
- */
 async function syncYithAffiliates() {
-  try {
-    console.log("🔄 Starting affiliate sync...");
-    
-    const list = await fetchYithAffiliates();
-
-    if (!list || list.length === 0) {
-      console.log("⚠️ No affiliates to sync");
-      return { 
-        synced: 0, 
-        skipped: false, 
-        message: "No affiliates found" 
-      };
-    }
-
-    console.log(`📊 Syncing ${list.length} affiliates...`);
-
-    let synced = 0;
-    let errors = 0;
-
-    for (const affiliate of list) {
-      try {
-        const result = await upsertYithAffiliate(affiliate);
-        if (result) {
-          synced++;
-          console.log(`  ✅ ${affiliate.name}`);
-        }
-      } catch (err) {
-        errors++;
-        console.error(`  ❌ Failed to sync ${affiliate.name}:`, err.message);
-      }
-    }
-
-    console.log(`✅ Sync complete: ${synced} synced, ${errors} errors`);
-    
-    return {
-      synced,
-      failed: errors,
-      skipped: false,
-      message: `Synced ${synced} affiliates${errors > 0 ? `, ${errors} failed` : ""}`,
-    };
-  } catch (err) {
-    console.error("❌ Affiliate sync failed:", err.message);
-    return {
-      synced: 0,
-      failed: 0,
-      skipped: false,
-      error: err.message,
-    };
+  const list = await fetchYithAffiliates();
+  if (list === null) return { synced: 0, skipped: true };
+  let synced = 0;
+  for (const a of list) {
+    await upsertYithAffiliate(a);
+    synced += 1;
   }
+  return { synced, skipped: false };
 }
 
-module.exports = { syncYithAffiliates, fetchYithAffiliates };
+module.exports = { syncYithAffiliates };

@@ -9,6 +9,7 @@ router.use(requireAuth);
 const MANUAL_COLUMNS = [
   "order_no", "customer", "phone", "product", "qty", "sell", "cost",
   "courier", "tracking", "status", "amount_paid", "due_date", "method", "date",
+  "billed_by", "return_reason",
 ];
 
 const writableColumns = (req) => (isOwner(req.user) ? MANUAL_COLUMNS : MANUAL_COLUMNS.filter((c) => c !== "cost"));

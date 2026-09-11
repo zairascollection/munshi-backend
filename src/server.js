@@ -14,21 +14,30 @@ const { inventoryRouter, employeesRouter, affiliatesRouter, accountsRouter, expe
 const { requireAuth, requireResourceAccess } = require("./middleware/auth");
 const { syncRecentOrders } = require("./services/woocommerce");
 const { syncYithAffiliates } = require("./services/yith");
+const { sendLowStockAlert } = require("./services/alerts");
 
 const app = express();
 
+// Logs every incoming request's method and path to Railway's Deploy Logs —
+// useful for confirming requests are actually reaching this process.
+app.use((req, res, next) => {
+  console.log(`[req] ${req.method} ${req.originalUrl} — origin: ${req.headers.origin || "(none)"}`);
+  next();
+});
+
 const corsOrigin = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(",").map((o) => o.trim())
-  : ["https://munshi-frontend-gilt.vercel.app", "http://localhost:3000", "http://127.0.0.1:3000"];
+  : "*";
 
 // Manual CORS handling (instead of the `cors` package) so preflight
 // (OPTIONS) requests are answered directly by this middleware, with no
 // dependency on how any library internally matches request methods.
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  if (corsOrigin === "*" || (Array.isArray(corsOrigin) && origin && corsOrigin.includes(origin))) {
-    res.header("Access-Control-Allow-Origin", origin || "*");
-    res.header("Access-Control-Allow-Credentials", "true");
+  if (corsOrigin === "*") {
+    res.header("Access-Control-Allow-Origin", "*");
+  } else if (Array.isArray(corsOrigin) && origin && corsOrigin.includes(origin)) {
+    res.header("Access-Control-Allow-Origin", origin);
   }
   res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS");
   res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, x-wc-webhook-signature, x-wc-webhook-topic, x-wc-webhook-delivery-id");
@@ -87,6 +96,35 @@ app.post("/sync/affiliates", requireAuth, requireResourceAccess("affiliates"), a
   } catch (err) {
     console.error("Affiliate sync failed:", err);
     res.status(502).json({ error: "Affiliate sync failed", detail: err.message });
+  }
+});
+
+// Manual "send low stock alert now" button (owner only).
+app.post("/alerts/low-stock", requireAuth, requireResourceAccess("finance"), async (req, res) => {
+  try {
+    const result = await sendLowStockAlert();
+    res.json(result);
+  } catch (err) {
+    console.error("Low stock alert failed:", err);
+    res.status(502).json({ error: "Alert failed", detail: err.message });
+  }
+});
+
+// Scheduled version for Railway's Cron Job feature — not JWT-protected since
+// a cron job can't log in, guarded by a shared secret instead. Set up a Cron
+// Job service in Railway pointing at:
+//   GET https://<your-backend-domain>/alerts/low-stock/cron?secret=<ALERTS_CRON_SECRET>
+// with a schedule like "0 9 * * *" (9am daily).
+app.get("/alerts/low-stock/cron", async (req, res) => {
+  if (!process.env.ALERTS_CRON_SECRET || req.query.secret !== process.env.ALERTS_CRON_SECRET) {
+    return res.status(401).json({ error: "Invalid or missing secret" });
+  }
+  try {
+    const result = await sendLowStockAlert();
+    res.json(result);
+  } catch (err) {
+    console.error("Scheduled low stock alert failed:", err);
+    res.status(502).json({ error: "Alert failed", detail: err.message });
   }
 });
 

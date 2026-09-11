@@ -65,6 +65,8 @@ CREATE TABLE IF NOT EXISTS orders (
   due_date DATE,
   method TEXT, -- COD / JazzCash / EasyPaisa / Bank Transfer
   date DATE NOT NULL DEFAULT CURRENT_DATE,
+  billed_by TEXT,       -- name of the staff/owner who generated the bill (POS orders)
+  return_reason TEXT,   -- why an order was marked Returned (size, quality, changed mind, etc.)
 
   -- WooCommerce sync bookkeeping
   source TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('manual', 'woocommerce')),
@@ -134,3 +136,13 @@ CREATE TABLE IF NOT EXISTS webhook_events (
   received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (wc_order_id, delivery_id)
 );
+
+-- ---------- Safety net for columns added after the first migration ----------
+-- CREATE TABLE IF NOT EXISTS does nothing to a table that already exists, so
+-- these ALTERs make sure a database migrated before a given feature was
+-- added still picks up the new column on the next migration run.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS image TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS billed_by TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS return_reason TEXT;
+

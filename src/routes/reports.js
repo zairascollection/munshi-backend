@@ -141,4 +141,107 @@ router.get("/monthly-list", requireAuth, requireResourceAccess("finance"), async
   }
 });
 
+// =====================================================================
+// Month-end analysis sheet — the "khud he ban jaye" part.
+//
+// generateMonthlySheet() freezes a full month of analytics into
+// monthly_reports so the owner has a permanent record even if orders are
+// edited later. It runs automatically from the cron endpoint below, and
+// the UI can also ask for any month on demand.
+// =====================================================================
+const { buildAnalytics } = require("./analytics");
+
+function monthBounds(month) {
+  const [year, monthNum] = month.split("-").map(Number);
+  const lastDay = new Date(year, monthNum, 0).getDate();
+  return { from: `${month}-01`, to: `${month}-${String(lastDay).padStart(2, "0")}` };
+}
+
+async function generateMonthlySheet(month) {
+  const { from, to } = monthBounds(month);
+  const analytics = await buildAnalytics({ from, to });
+
+  const { rows: lowStock } = await pool.query(
+    "SELECT name, sku, quantity, reorder FROM inventory WHERE quantity <= reorder ORDER BY quantity ASC"
+  );
+  const { rows: stockRow } = await pool.query(
+    "SELECT COALESCE(SUM(quantity * cost),0) AS invested, COALESCE(SUM(quantity * price),0) AS retail FROM inventory"
+  );
+  const { rows: returnReasons } = await pool.query(
+    `SELECT COALESCE(NULLIF(TRIM(return_reason),''),'Not specified') AS reason,
+            COUNT(*)::int AS count
+       FROM orders
+      WHERE status = 'Returned' AND date >= $1 AND date <= $2
+      GROUP BY 1 ORDER BY 2 DESC`,
+    [from, to]
+  );
+
+  const sheet = {
+    ...analytics,
+    month,
+    stock: {
+      invested: Number(stockRow[0].invested),
+      retailValue: Number(stockRow[0].retail),
+      lowStock,
+    },
+    returnReasons,
+  };
+
+  await pool.query(
+    `INSERT INTO monthly_reports (month, data, generated_at)
+     VALUES ($1, $2, now())
+     ON CONFLICT (month) DO UPDATE SET data = EXCLUDED.data, generated_at = now()`,
+    [month, sheet]
+  );
+
+  return sheet;
+}
+
+// GET /reports/sheet?month=2026-09 — build (and save) the analysis sheet
+router.get("/sheet", requireAuth, requireResourceAccess("finance"), async (req, res) => {
+  try {
+    const month = req.query.month || new Date().toISOString().slice(0, 7);
+    res.json(await generateMonthlySheet(month));
+  } catch (err) {
+    console.error("Monthly sheet failed:", err);
+    res.status(500).json({ error: "Failed to build monthly sheet", detail: err.message });
+  }
+});
+
+// GET /reports/saved — list every frozen month-end sheet
+router.get("/saved", requireAuth, requireResourceAccess("finance"), async (req, res) => {
+  const { rows } = await pool.query(
+    "SELECT month, generated_at FROM monthly_reports ORDER BY month DESC LIMIT 24"
+  );
+  res.json(rows);
+});
+
+// GET /reports/saved/:month — read one back exactly as it was frozen
+router.get("/saved/:month", requireAuth, requireResourceAccess("finance"), async (req, res) => {
+  const { rows } = await pool.query("SELECT data, generated_at FROM monthly_reports WHERE month = $1", [req.params.month]);
+  if (!rows[0]) return res.status(404).json({ error: "No saved sheet for that month" });
+  res.json({ ...rows[0].data, generatedAt: rows[0].generated_at });
+});
+
+// GET /reports/month-end/cron?secret=... — point a Railway Cron Job at this
+// with schedule "5 0 1 * *" (00:05 on the 1st of every month). It freezes
+// LAST month automatically, so the owner never has to remember to run it.
+router.get("/month-end/cron", async (req, res) => {
+  if (!process.env.ALERTS_CRON_SECRET || req.query.secret !== process.env.ALERTS_CRON_SECRET) {
+    return res.status(401).json({ error: "Invalid or missing secret" });
+  }
+  try {
+    const now = new Date();
+    const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const month = req.query.month || `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, "0")}`;
+    const sheet = await generateMonthlySheet(month);
+    console.log(`Month-end sheet generated for ${month}: net profit ${sheet.summary.netProfit}`);
+    res.json({ ok: true, month, summary: sheet.summary });
+  } catch (err) {
+    console.error("Month-end cron failed:", err);
+    res.status(500).json({ error: "Month-end job failed", detail: err.message });
+  }
+});
+
 module.exports = router;
+module.exports.generateMonthlySheet = generateMonthlySheet;

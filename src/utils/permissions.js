@@ -1,30 +1,37 @@
-// Mirrors the ownerOnly NAV sections + delete restrictions already
-// designed into munshi.jsx, now enforced server-side instead of just
-// hidden in the UI (so staff can't hit the API directly and see them).
+// Three roles: owner (full access), manager (sees cost/salary/finance/
+// reports but can't delete anything and can't touch Team or Accounts),
+// staff (operational only — no cost, salary, profit, finance, delete).
 
-const OWNER_ONLY_RESOURCES = new Set(["finance", "accounts", "expenses", "affiliates", "users"]);
+// Always owner-only, regardless of manager status.
+const OWNER_ONLY_RESOURCES = new Set(["accounts", "users", "audit_log"]);
+// Visible to manager and owner, hidden from staff.
+const MANAGER_RESOURCES = new Set(["finance", "expenses", "affiliates", "ad_spend", "settings", "analytics"]);
 
 function isOwner(user) {
   return user && user.role === "owner";
 }
 
-function canAccessResource(user, resource) {
-  if (isOwner(user)) return true;
-  return !OWNER_ONLY_RESOURCES.has(resource);
+function isManagerOrAbove(user) {
+  return user && (user.role === "owner" || user.role === "manager");
 }
 
+function canAccessResource(user, resource) {
+  if (OWNER_ONLY_RESOURCES.has(resource)) return isOwner(user);
+  if (MANAGER_RESOURCES.has(resource)) return isManagerOrAbove(user);
+  return true;
+}
+
+// Only the owner can ever delete records.
 function canDelete(user) {
   return isOwner(user);
 }
 
-// Strips cost/profit-revealing fields from inventory/order records
-// before sending them to a staff user.
+// Strips cost/salary from records before sending them to staff. Managers
+// see everything a record has (inventory cost is visible to everyone now,
+// tracked instead via the audit log — see routes/auditLog.js).
 function scrubForRole(user, resource, record) {
-  if (isOwner(user) || !record) return record;
+  if (isManagerOrAbove(user) || !record) return record;
   const clone = { ...record };
-  if (resource === "inventory") {
-    delete clone.cost;
-  }
   if (resource === "orders") {
     delete clone.cost;
   }
@@ -34,4 +41,4 @@ function scrubForRole(user, resource, record) {
   return clone;
 }
 
-module.exports = { isOwner, canAccessResource, canDelete, scrubForRole, OWNER_ONLY_RESOURCES };
+module.exports = { isOwner, isManagerOrAbove, canAccessResource, canDelete, scrubForRole, OWNER_ONLY_RESOURCES, MANAGER_RESOURCES };

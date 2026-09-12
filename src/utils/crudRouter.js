@@ -1,21 +1,26 @@
+const { logChanges } = require("./auditLog");
+
 const express = require("express");
 const pool = require("../db/pool");
 const { requireAuth, requireResourceAccess, requireDeletePermission } = require("../middleware/auth");
-const { scrubForRole, isOwner } = require("./permissions");
+const { scrubForRole, isManagerOrAbove } = require("./permissions");
 
 // Builds a basic REST router for a table: GET list, GET one, POST, PUT, DELETE.
 // `columns` is the ordered list of DB column names accepted on create/update
 // (excluding id/created_at/updated_at, which are handled automatically).
-// `ownerOnlyFields` are excluded from POST/PUT for non-owners entirely (not
-// just set to blank) so a staff edit can never overwrite a cost/salary-type
-// field they can't even see with an empty value.
-function buildCrudRouter({ table, resource, columns, ownerOnly = false, ownerOnlyFields = [] }) {
+// `ownerOnlyFields` are excluded from POST/PUT for staff entirely (not just
+// set to blank) so a staff edit can never overwrite a salary-type field
+// they can't even see. Managers and owners can write these fields.
+// `auditLog: true` records who changed which field (old → new) whenever an
+// existing record is edited, so the owner can review changes later even
+// though everyone can now edit e.g. inventory cost directly.
+function buildCrudRouter({ table, resource, columns, ownerOnly = false, ownerOnlyFields = [], auditLog = false, labelField = "name" }) {
   const router = express.Router();
   router.use(requireAuth);
   if (ownerOnly) router.use(requireResourceAccess(resource));
 
   const writableColumns = (req) =>
-    isOwner(req.user) ? columns : columns.filter((c) => !ownerOnlyFields.includes(c));
+    isManagerOrAbove(req.user) ? columns : columns.filter((c) => !ownerOnlyFields.includes(c));
 
   router.get("/", async (req, res) => {
     const { rows } = await pool.query(`SELECT * FROM ${table} ORDER BY created_at DESC`);
@@ -41,6 +46,11 @@ function buildCrudRouter({ table, resource, columns, ownerOnly = false, ownerOnl
 
   router.put("/:id", async (req, res) => {
     const cols = writableColumns(req);
+    let before = null;
+    if (auditLog) {
+      const { rows } = await pool.query(`SELECT * FROM ${table} WHERE id = $1`, [req.params.id]);
+      before = rows[0] || null;
+    }
     const sets = cols.map((c, i) => `${c} = $${i + 1}`).join(", ");
     const values = cols.map((c) => req.body[c]);
     const { rows } = await pool.query(
@@ -48,6 +58,9 @@ function buildCrudRouter({ table, resource, columns, ownerOnly = false, ownerOnl
       [...values, req.params.id]
     );
     if (!rows[0]) return res.status(404).json({ error: "Not found" });
+    if (auditLog && before) {
+      await logChanges({ resource, recordId: req.params.id, recordLabel: before[labelField] || before.name || "", before, after: rows[0], user: req.user, columns: cols });
+    }
     res.json(scrubForRole(req.user, resource, rows[0]));
   });
 

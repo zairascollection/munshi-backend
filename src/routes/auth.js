@@ -38,11 +38,11 @@ router.get("/me", requireAuth, (req, res) => {
   res.json({ user: req.user });
 });
 
-// POST /auth/users  (owner only) — create a staff or owner login
+// POST /auth/users  (owner only) — create a staff, manager, or owner login
 router.post("/users", requireAuth, requireResourceAccess("users"), async (req, res) => {
   const { name, email, password, role } = req.body || {};
-  if (!name || !email || !password || !["owner", "staff"].includes(role)) {
-    return res.status(400).json({ error: "name, email, password, role(owner|staff) required" });
+  if (!name || !email || !password || !["owner", "staff", "manager"].includes(role)) {
+    return res.status(400).json({ error: "name, email, password, role(owner|manager|staff) required" });
   }
   const password_hash = await bcrypt.hash(password, 10);
   try {

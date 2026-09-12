@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS users (
   name TEXT NOT NULL,
   email TEXT UNIQUE NOT NULL,
   password_hash TEXT NOT NULL,
-  role TEXT NOT NULL CHECK (role IN ('owner', 'staff')),
+  role TEXT NOT NULL CHECK (role IN ('owner', 'staff', 'manager')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS orders (
   date DATE NOT NULL DEFAULT CURRENT_DATE,
   billed_by TEXT,       -- name of the staff/owner who generated the bill (POS orders)
   return_reason TEXT,   -- why an order was marked Returned (size, quality, changed mind, etc.)
+  city TEXT,            -- delivery city, for city-wise performance/return-rate analysis
 
   -- WooCommerce sync bookkeeping
   source TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('manual', 'woocommerce')),
@@ -145,4 +146,85 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAU
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS image TEXT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS billed_by TEXT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS return_reason TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS city TEXT;
 
+-- Widen the users.role check to allow 'manager' on databases created
+-- before this role existed. Constraint name matches Postgres's default
+-- auto-generated name for an inline CHECK on this column.
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
+ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('owner', 'staff', 'manager'));
+
+-- ---------- Audit log ----------
+-- Field-level change history, mainly so the owner can see who edited
+-- inventory cost (now editable by everyone) and when.
+CREATE TABLE IF NOT EXISTS audit_log (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  resource TEXT NOT NULL,
+  record_id UUID NOT NULL,
+  record_label TEXT,
+  field TEXT NOT NULL,
+  old_value TEXT,
+  new_value TEXT,
+  changed_by TEXT NOT NULL,
+  changed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_audit_log_resource ON audit_log (resource, changed_at DESC);
+
+
+-- =====================================================================
+-- v2 — Returns, COD cost tracking, ad spend, settings, monthly snapshots
+-- (Financify-style profit tracking). All additive & idempotent.
+-- =====================================================================
+
+-- ---------- Orders: COD / return economics ----------
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS channel TEXT;              -- Website / POS / Instagram / WhatsApp / Other
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_charge NUMERIC NOT NULL DEFAULT 0;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS return_charge NUMERIC NOT NULL DEFAULT 0;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS refund_amount NUMERIC NOT NULL DEFAULT 0;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS restocked BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS returned_at DATE;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivered_at DATE;
+
+CREATE INDEX IF NOT EXISTS idx_orders_city ON orders (city);
+CREATE INDEX IF NOT EXISTS idx_orders_billed_by ON orders (billed_by);
+
+-- ---------- Ad / marketing spend ----------
+-- Financify syncs this from Meta/Google APIs. Here it's manual entry
+-- (one row per channel per day) — same maths, no API keys needed.
+CREATE TABLE IF NOT EXISTS ad_spend (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  date DATE NOT NULL DEFAULT CURRENT_DATE,
+  channel TEXT NOT NULL,          -- Facebook / Instagram / Google / TikTok / Other
+  campaign TEXT,
+  amount NUMERIC NOT NULL DEFAULT 0,
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_ad_spend_date ON ad_spend (date);
+
+-- ---------- App settings (single row, key/value) ----------
+-- Default COD charges, tax rate, cash-handling %. Used to auto-fill new
+-- orders and to compute true profit in the analytics endpoints.
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+INSERT INTO settings (key, value) VALUES
+  ('default_delivery_charge', '250'),
+  ('default_return_charge', '150'),
+  ('cash_handling_pct', '1'),
+  ('tax_pct', '0'),
+  ('packaging_cost', '50')
+ON CONFLICT (key) DO NOTHING;
+
+-- ---------- Auto month-end analysis snapshots ----------
+-- Written by the month-end cron so the owner has a frozen record of each
+-- month even after orders are later edited.
+CREATE TABLE IF NOT EXISTS monthly_reports (
+  month TEXT PRIMARY KEY,            -- 'YYYY-MM'
+  data JSONB NOT NULL,
+  generated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

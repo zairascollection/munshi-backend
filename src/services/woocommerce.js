@@ -47,6 +47,7 @@ function mapWooOrderToMunshi(wcOrder) {
     order_no: `WC-${wcOrder.number || wcOrder.id}`,
     customer,
     phone: billing.phone || null,
+    city: billing.city || null,
     product: lineItemNames,
     qty: qty || 1,
     sell,

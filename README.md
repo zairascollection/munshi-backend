@@ -117,3 +117,50 @@ Delete is blocked for staff on every resource regardless of the table above
   is designed so those changes are mostly mechanical: the JSON shape returned
   matches the existing state shape closely (snake_case columns instead of
   camelCase being the main difference to account for).
+
+---
+
+## v2 update — returns, manager portal, profit tracking, month-end sheet
+
+### New API endpoints
+
+| Method | Path | Who | What |
+|---|---|---|---|
+| POST | `/orders/:id/return` | any logged-in user | Marks Returned + records refund, return charge, restocks inventory, writes audit log — all in one transaction |
+| GET | `/analytics?from=&to=` | manager, owner | Full profit engine: COD costs, post-delivery ROAS, city/courier/channel/staff/product breakdowns |
+| GET | `/reports/sheet?month=YYYY-MM` | manager, owner | Builds **and saves** the month's analysis sheet |
+| GET | `/reports/saved` | manager, owner | List of frozen month-end sheets |
+| GET | `/reports/saved/:month` | manager, owner | Read one frozen sheet |
+| GET | `/reports/month-end/cron?secret=` | cron only | Auto-generates **last month's** sheet |
+| GET / PUT | `/settings` | read: all, write: owner | Default delivery/return charge, packaging, cash handling %, tax % |
+| CRUD | `/ad-spend` | manager, owner | Manual ad spend entries (replaces Financify's Meta/Google auto-sync) |
+
+### New tables
+`ad_spend`, `settings`, `monthly_reports` — plus new `orders` columns:
+`channel, delivery_charge, return_charge, refund_amount, restocked, returned_at, delivered_at`.
+
+All of it is added by `schema.sql`, which runs automatically on every boot
+(`CREATE TABLE IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS`), so **no manual
+migration is needed** — just redeploy.
+
+### Set up the automatic month-end sheet
+
+In Railway, add a **Cron Job** service pointing at:
+
+```
+GET https://<your-backend-domain>/reports/month-end/cron?secret=<ALERTS_CRON_SECRET>
+```
+
+Schedule: `5 0 1 * *` — 00:05 on the 1st of every month. It freezes the
+previous month into `monthly_reports`, and the Monthly sheet screen reads
+it back. `ALERTS_CRON_SECRET` is the same env var the low-stock alert uses.
+
+### Audit log coverage
+Field-level history is now recorded for **inventory, orders, employees,
+expenses, ad spend and settings** — not just inventory. Visible to the owner
+only, under *Change history*.
+
+### Role summary
+- **Staff** — POS, inventory (incl. real cost, editable), orders, returns, customers, reports. No finance, profit, accounts, expenses, affiliates, ad spend, team, settings, history. No delete.
+- **Manager** — everything staff has, plus order cost, salaries, finance, expenses, affiliates, profit tracker, monthly sheet, ad spend. **Cannot** delete records, manage Accounts, manage Team, change cost settings, or see the change history.
+- **Owner** — everything.

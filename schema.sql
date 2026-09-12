@@ -171,3 +171,60 @@ CREATE TABLE IF NOT EXISTS audit_log (
 CREATE INDEX IF NOT EXISTS idx_audit_log_resource ON audit_log (resource, changed_at DESC);
 
 
+-- =====================================================================
+-- v2 — Returns, COD cost tracking, ad spend, settings, monthly snapshots
+-- (Financify-style profit tracking). All additive & idempotent.
+-- =====================================================================
+
+-- ---------- Orders: COD / return economics ----------
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS channel TEXT;              -- Website / POS / Instagram / WhatsApp / Other
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_charge NUMERIC NOT NULL DEFAULT 0;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS return_charge NUMERIC NOT NULL DEFAULT 0;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS refund_amount NUMERIC NOT NULL DEFAULT 0;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS restocked BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS returned_at DATE;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivered_at DATE;
+
+CREATE INDEX IF NOT EXISTS idx_orders_city ON orders (city);
+CREATE INDEX IF NOT EXISTS idx_orders_billed_by ON orders (billed_by);
+
+-- ---------- Ad / marketing spend ----------
+-- Financify syncs this from Meta/Google APIs. Here it's manual entry
+-- (one row per channel per day) — same maths, no API keys needed.
+CREATE TABLE IF NOT EXISTS ad_spend (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  date DATE NOT NULL DEFAULT CURRENT_DATE,
+  channel TEXT NOT NULL,          -- Facebook / Instagram / Google / TikTok / Other
+  campaign TEXT,
+  amount NUMERIC NOT NULL DEFAULT 0,
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_ad_spend_date ON ad_spend (date);
+
+-- ---------- App settings (single row, key/value) ----------
+-- Default COD charges, tax rate, cash-handling %. Used to auto-fill new
+-- orders and to compute true profit in the analytics endpoints.
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+INSERT INTO settings (key, value) VALUES
+  ('default_delivery_charge', '250'),
+  ('default_return_charge', '150'),
+  ('cash_handling_pct', '1'),
+  ('tax_pct', '0'),
+  ('packaging_cost', '50')
+ON CONFLICT (key) DO NOTHING;
+
+-- ---------- Auto month-end analysis snapshots ----------
+-- Written by the month-end cron so the owner has a frozen record of each
+-- month even after orders are later edited.
+CREATE TABLE IF NOT EXISTS monthly_reports (
+  month TEXT PRIMARY KEY,            -- 'YYYY-MM'
+  data JSONB NOT NULL,
+  generated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

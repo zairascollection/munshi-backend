@@ -10,7 +10,7 @@ const ordersRoutes = require("./routes/orders");
 const webhookRoutes = require("./routes/webhooks");
 const financeRoutes = require("./routes/finance");
 const reportsRoutes = require("./routes/reports");
-const { inventoryRouter, employeesRouter, affiliatesRouter, accountsRouter, expensesRouter } = require("./routes/resources");
+const { inventoryRouter, employeesRouter, affiliatesRouter, accountsRouter, expensesRouter, adSpendRouter } = require("./routes/resources");
 const { requireAuth, requireResourceAccess } = require("./middleware/auth");
 const { syncRecentOrders } = require("./services/woocommerce");
 const { syncYithAffiliates } = require("./services/yith");
@@ -68,6 +68,9 @@ app.use("/expenses", expensesRouter);
 app.use("/finance", financeRoutes);
 app.use("/audit-log", require("./routes/auditLog"));
 app.use("/reports", reportsRoutes);
+app.use("/ad-spend", adSpendRouter);
+app.use("/settings", require("./routes/settings"));
+app.use("/analytics", require("./routes/analytics"));
 
 // Manual "sync now" button for the UI, and a fallback if webhooks are
 // ever missed. Owner-only since it touches store-wide order data.

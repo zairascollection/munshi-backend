@@ -1,9 +1,28 @@
 const buildCrudRouter = require("../utils/crudRouter");
+const { pushStockSafe } = require("../services/woocommerce");
 
 const inventoryRouter = buildCrudRouter({
   table: "inventory",
   resource: "inventory",
-  columns: ["name", "sku", "category", "quantity", "reorder", "cost", "price", "image", "wc_product_id", "wc_variation_id"],
+  columns: [
+    "name", "sku", "category", "quantity", "reorder", "cost", "price", "image",
+    "wc_product_id", "wc_variation_id",
+    // Variant fields — each size/colour is its own row, grouped by parent_name.
+    "parent_name", "size", "color", "supplier_id",
+  ],
+  auditLog: true,
+  // Any quantity change goes straight back to the website so a POS sale
+  // can't leave the shop overselling stock it no longer has.
+  afterWrite: (after, before) => {
+    if (!before || Number(before.quantity) !== Number(after.quantity)) pushStockSafe(after);
+  },
+});
+
+const suppliersRouter = buildCrudRouter({
+  table: "suppliers",
+  resource: "suppliers",
+  columns: ["name", "contact_person", "phone", "city", "notes"],
+  ownerOnly: true,
   auditLog: true,
 });
 
@@ -48,4 +67,4 @@ const adSpendRouter = buildCrudRouter({
   labelField: "channel",
 });
 
-module.exports = { inventoryRouter, employeesRouter, affiliatesRouter, accountsRouter, expensesRouter, adSpendRouter };
+module.exports = { inventoryRouter, employeesRouter, affiliatesRouter, accountsRouter, expensesRouter, adSpendRouter, suppliersRouter };

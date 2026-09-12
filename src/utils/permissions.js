@@ -5,7 +5,7 @@
 // Always owner-only, regardless of manager status.
 const OWNER_ONLY_RESOURCES = new Set(["accounts", "users", "audit_log"]);
 // Visible to manager and owner, hidden from staff.
-const MANAGER_RESOURCES = new Set(["finance", "expenses", "affiliates", "ad_spend", "settings", "analytics"]);
+const MANAGER_RESOURCES = new Set(["finance", "expenses", "affiliates", "ad_spend", "settings", "analytics", "suppliers", "purchases"]);
 
 function isOwner(user) {
   return user && user.role === "owner";

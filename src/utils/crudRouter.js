@@ -14,7 +14,7 @@ const { scrubForRole, isManagerOrAbove } = require("./permissions");
 // `auditLog: true` records who changed which field (old → new) whenever an
 // existing record is edited, so the owner can review changes later even
 // though everyone can now edit e.g. inventory cost directly.
-function buildCrudRouter({ table, resource, columns, ownerOnly = false, ownerOnlyFields = [], auditLog = false, labelField = "name" }) {
+function buildCrudRouter({ table, resource, columns, ownerOnly = false, ownerOnlyFields = [], auditLog = false, labelField = "name", afterWrite = null }) {
   const router = express.Router();
   router.use(requireAuth);
   if (ownerOnly) router.use(requireResourceAccess(resource));
@@ -41,6 +41,7 @@ function buildCrudRouter({ table, resource, columns, ownerOnly = false, ownerOnl
       `INSERT INTO ${table} (${cols.join(", ")}) VALUES (${placeholders}) RETURNING *`,
       values
     );
+    if (afterWrite) afterWrite(rows[0], null);
     res.status(201).json(scrubForRole(req.user, resource, rows[0]));
   });
 
@@ -61,6 +62,7 @@ function buildCrudRouter({ table, resource, columns, ownerOnly = false, ownerOnl
     if (auditLog && before) {
       await logChanges({ resource, recordId: req.params.id, recordLabel: before[labelField] || before.name || "", before, after: rows[0], user: req.user, columns: cols });
     }
+    if (afterWrite) afterWrite(rows[0], before);
     res.json(scrubForRole(req.user, resource, rows[0]));
   });
 

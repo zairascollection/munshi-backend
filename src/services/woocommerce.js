@@ -153,4 +153,74 @@ async function syncRecentOrders({ days } = {}) {
   return total;
 }
 
-module.exports = { mapWooOrderToMunshi, upsertWooOrder, fetchWooOrders, syncRecentOrders };
+// ---------------------------------------------------------------
+// Munshi -> WooCommerce stock push (the other half of the sync).
+//
+// Without this, a POS sale never reduces website stock and the shop
+// oversells. Inventory rows already carry wc_product_id / wc_variation_id
+// from the order sync, so we just PUT the new quantity back.
+// Failures are logged, never thrown: a website hiccup must not stop a
+// sale from being recorded in Munshi.
+// ---------------------------------------------------------------
+function wcConfigured() {
+  return Boolean(process.env.WC_STORE_URL && process.env.WC_CONSUMER_KEY && process.env.WC_CONSUMER_SECRET);
+}
+
+function wcUrl(path) {
+  const base = process.env.WC_STORE_URL.replace(/\/$/, "");
+  const url = new URL(`${base}/wp-json/wc/v3/${path}`);
+  url.searchParams.set("consumer_key", process.env.WC_CONSUMER_KEY);
+  url.searchParams.set("consumer_secret", process.env.WC_CONSUMER_SECRET);
+  return url.toString();
+}
+
+async function pushStockForRow(row) {
+  if (!wcConfigured()) return { skipped: true, reason: "WooCommerce not configured" };
+  if (!row || !row.wc_product_id) return { skipped: true, reason: "Item website se linked nahi hai" };
+
+  const qty = Math.max(0, Math.round(Number(row.quantity) || 0));
+  const path = row.wc_variation_id
+    ? `products/${row.wc_product_id}/variations/${row.wc_variation_id}`
+    : `products/${row.wc_product_id}`;
+
+  const res = await fetch(wcUrl(path), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      manage_stock: true,
+      stock_quantity: qty,
+      stock_status: qty > 0 ? "instock" : "outofstock",
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`WooCommerce stock push failed (${res.status}): ${text.slice(0, 200)}`);
+  }
+  return { ok: true, qty };
+}
+
+// Fire-and-forget wrapper used from the inventory routes.
+function pushStockSafe(row) {
+  pushStockForRow(row).catch((err) => console.error("Stock push:", err.message));
+}
+
+// Manual "push all stock to website" button — also useful as a nightly
+// reconcile if a single push was ever missed.
+async function pushAllStock() {
+  if (!wcConfigured()) return { skipped: true, reason: "WooCommerce not configured" };
+  const { rows } = await pool.query("SELECT * FROM inventory WHERE wc_product_id IS NOT NULL");
+  let pushed = 0;
+  const failed = [];
+  for (const row of rows) {
+    try {
+      await pushStockForRow(row);
+      pushed += 1;
+    } catch (err) {
+      failed.push({ name: row.name, error: err.message });
+    }
+  }
+  return { pushed, linked: rows.length, failed };
+}
+
+module.exports = { mapWooOrderToMunshi, upsertWooOrder, fetchWooOrders, syncRecentOrders, pushStockForRow, pushStockSafe, pushAllStock, wcConfigured };

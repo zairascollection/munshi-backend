@@ -164,3 +164,58 @@ only, under *Change history*.
 - **Staff** — POS, inventory (incl. real cost, editable), orders, returns, customers, reports. No finance, profit, accounts, expenses, affiliates, ad spend, team, settings, history. No delete.
 - **Manager** — everything staff has, plus order cost, salaries, finance, expenses, affiliates, profit tracker, monthly sheet, ad spend. **Cannot** delete records, manage Accounts, manage Team, change cost settings, or see the change history.
 - **Owner** — everything.
+
+---
+
+## v3 update — WhatsApp confirmation, stock sync, customers, purchases, variants
+
+### New endpoints
+
+| Method | Path | Who | What |
+|---|---|---|---|
+| POST | `/whatsapp/confirm/:orderId` | any user | Sends the pre-dispatch confirmation message |
+| POST | `/whatsapp/confirm-bulk` | any user | Same, for a list of order ids |
+| PUT | `/whatsapp/status/:orderId` | any user | Set confirmation by hand (phone replies) |
+| GET/POST | `/whatsapp/webhook` | Meta | Verification + incoming replies ("HAAN"/"NAHI" auto-updates the order) |
+| GET | `/whatsapp/health` | any user | Which env vars are wired |
+| POST | `/sync/stock` | manager, owner | Push every linked item's quantity to WooCommerce |
+| POST | `/alerts/digest` | manager, owner | Send the daily digest now |
+| GET | `/alerts/digest/cron?secret=` | cron | Scheduled daily digest |
+| GET | `/customers` | any user | Ledger: lifetime value, returns, outstanding, risk flag |
+| GET | `/customers/risk/:phone` | any user | Live lookup while writing an order |
+| PUT | `/customers/:phone` | any user | Notes + COD block toggle |
+| CRUD | `/suppliers` | manager, owner | Supplier list |
+| CRUD | `/purchases` | manager, owner | Purchase orders |
+| POST | `/purchases/:id/receive` | manager, owner | Raises stock + sets weighted-average cost |
+
+### New tables
+`suppliers`, `purchase_orders`, `purchase_order_items`, `customers`, `whatsapp_log`
+— plus `inventory.parent_name / size / color / supplier_id` and
+`orders.confirmation_status / confirmation_sent_at / confirmed_at`.
+
+### Two-way stock sync
+Any inventory quantity change (POS sale, return restock, PO receive, manual
+edit) pushes the new quantity back to WooCommerce automatically, so the shop
+stops overselling. Failures are logged and never block the sale.
+
+### Cron jobs to add in Railway
+
+```
+GET /reports/month-end/cron?secret=<ALERTS_CRON_SECRET>   schedule: 5 0 1 * *
+GET /alerts/digest/cron?secret=<ALERTS_CRON_SECRET>       schedule: 0 4 * * *
+GET /alerts/low-stock/cron?secret=<ALERTS_CRON_SECRET>    schedule: 0 4 * * *
+```
+
+(Railway cron runs in UTC — `0 4 * * *` is 9am Pakistan time.)
+
+### WhatsApp setup
+1. Meta Business account → WhatsApp → API Setup. Copy the **permanent access token** and the **Phone number ID**.
+2. Set `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_ID`, `WHATSAPP_VERIFY_TOKEN` (any string you invent), `OWNER_WHATSAPP`.
+3. In Meta's webhook config set the callback URL to `https://<backend>/whatsapp/webhook` and paste the same verify token. Subscribe to the **messages** field.
+4. Check *Cost settings → Integrations* in the app — all three dots should turn green.
+
+Note: Meta only allows free-form text inside a 24-hour window after the
+customer messages you. For first contact you need an approved **message
+template**. Until a template is approved, confirmations will work for
+customers who have messaged your number, and the status dropdown covers
+the rest.

@@ -10,11 +10,13 @@ const ordersRoutes = require("./routes/orders");
 const webhookRoutes = require("./routes/webhooks");
 const financeRoutes = require("./routes/finance");
 const reportsRoutes = require("./routes/reports");
-const { inventoryRouter, employeesRouter, affiliatesRouter, accountsRouter, expensesRouter, adSpendRouter } = require("./routes/resources");
+const { inventoryRouter, employeesRouter, affiliatesRouter, accountsRouter, expensesRouter, adSpendRouter, suppliersRouter } = require("./routes/resources");
 const { requireAuth, requireResourceAccess } = require("./middleware/auth");
 const { syncRecentOrders } = require("./services/woocommerce");
 const { syncYithAffiliates } = require("./services/yith");
 const { sendLowStockAlert } = require("./services/alerts");
+const { pushAllStock } = require("./services/woocommerce");
+const { sendDailyDigest } = require("./services/whatsapp");
 
 const app = express();
 
@@ -71,6 +73,50 @@ app.use("/reports", reportsRoutes);
 app.use("/ad-spend", adSpendRouter);
 app.use("/settings", require("./routes/settings"));
 app.use("/analytics", require("./routes/analytics"));
+app.use("/suppliers", suppliersRouter);
+app.use("/purchases", require("./routes/purchases"));
+app.use("/customers", require("./routes/customers"));
+app.use("/whatsapp", require("./routes/whatsapp"));
+
+// Push every linked inventory row's quantity back to WooCommerce.
+// Manual button in the UI, and a safety net if a single push was missed.
+app.post("/sync/stock", requireAuth, requireResourceAccess("finance"), async (req, res) => {
+  try {
+    const result = await pushAllStock();
+    if (result.skipped) return res.status(400).json({ error: result.reason });
+    res.json(result);
+  } catch (err) {
+    console.error("Stock push failed:", err);
+    res.status(502).json({ error: "Stock push failed", detail: err.message });
+  }
+});
+
+// Daily WhatsApp digest to the owner. Manual trigger...
+app.post("/alerts/digest", requireAuth, requireResourceAccess("finance"), async (req, res) => {
+  try {
+    const result = await sendDailyDigest();
+    res.json(result);
+  } catch (err) {
+    res.status(502).json({ error: "Digest failed", detail: err.message });
+  }
+});
+
+// ...and the scheduled one. Railway Cron Job:
+//   GET https://<backend>/alerts/digest/cron?secret=<ALERTS_CRON_SECRET>
+// with schedule "0 4 * * *" (9am PKT, since Railway cron runs in UTC).
+app.get("/alerts/digest/cron", async (req, res) => {
+  if (!process.env.ALERTS_CRON_SECRET || req.query.secret !== process.env.ALERTS_CRON_SECRET) {
+    return res.status(401).json({ error: "Invalid or missing secret" });
+  }
+  try {
+    const result = await sendDailyDigest();
+    console.log("Daily digest:", JSON.stringify(result));
+    res.json(result);
+  } catch (err) {
+    console.error("Digest cron failed:", err);
+    res.status(502).json({ error: "Digest failed", detail: err.message });
+  }
+});
 
 // Manual "sync now" button for the UI, and a fallback if webhooks are
 // ever missed. Owner-only since it touches store-wide order data.

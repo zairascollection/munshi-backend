@@ -228,3 +228,97 @@ CREATE TABLE IF NOT EXISTS monthly_reports (
   data JSONB NOT NULL,
   generated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- =====================================================================
+-- v3 — Variants, suppliers & purchases, customer ledger,
+--      WhatsApp order confirmation. All additive & idempotent.
+-- =====================================================================
+
+-- ---------- Inventory variants ----------
+-- Each size/colour stays its own row (its own SKU, stock, cost and price)
+-- but rows are grouped in the UI by parent_name. Existing rows have NULLs
+-- here and keep behaving exactly as before.
+ALTER TABLE inventory ADD COLUMN IF NOT EXISTS parent_name TEXT;
+ALTER TABLE inventory ADD COLUMN IF NOT EXISTS size TEXT;
+ALTER TABLE inventory ADD COLUMN IF NOT EXISTS color TEXT;
+ALTER TABLE inventory ADD COLUMN IF NOT EXISTS supplier_id UUID;
+CREATE INDEX IF NOT EXISTS idx_inventory_parent ON inventory (parent_name);
+
+-- ---------- Suppliers ----------
+CREATE TABLE IF NOT EXISTS suppliers (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  contact_person TEXT,
+  phone TEXT,
+  city TEXT,
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ---------- Purchase orders ----------
+-- Receiving a PO is what actually raises stock and sets the real cost,
+-- so cost stops being a number somebody types from memory.
+CREATE TABLE IF NOT EXISTS purchase_orders (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  po_no TEXT NOT NULL,
+  supplier_id UUID REFERENCES suppliers(id),
+  date DATE NOT NULL DEFAULT CURRENT_DATE,
+  status TEXT NOT NULL DEFAULT 'Draft' CHECK (status IN ('Draft', 'Ordered', 'Received', 'Cancelled')),
+  total NUMERIC NOT NULL DEFAULT 0,
+  amount_paid NUMERIC NOT NULL DEFAULT 0,
+  notes TEXT,
+  received_at DATE,
+  created_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS purchase_order_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  po_id UUID NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+  inventory_id UUID REFERENCES inventory(id),
+  name TEXT NOT NULL,
+  sku TEXT,
+  qty NUMERIC NOT NULL DEFAULT 0,
+  unit_cost NUMERIC NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_po_items_po ON purchase_order_items (po_id);
+
+-- ---------- Customer ledger ----------
+-- Order rows already hold every sale; this table only holds the things
+-- that are ABOUT the customer rather than about one order — notes, and
+-- whether they're blocked from COD after repeated refusals.
+CREATE TABLE IF NOT EXISTS customers (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  phone TEXT UNIQUE NOT NULL,
+  name TEXT,
+  city TEXT,
+  notes TEXT,
+  cod_blocked BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ---------- WhatsApp order confirmation ----------
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS confirmation_status TEXT NOT NULL DEFAULT 'Not sent';
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS confirmation_sent_at TIMESTAMPTZ;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMPTZ;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS po_id UUID;
+
+CREATE TABLE IF NOT EXISTS whatsapp_log (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id UUID,
+  phone TEXT NOT NULL,
+  direction TEXT NOT NULL CHECK (direction IN ('out', 'in')),
+  body TEXT,
+  status TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_whatsapp_log_order ON whatsapp_log (order_id);
+
+INSERT INTO settings (key, value) VALUES
+  ('whatsapp_enabled', '0'),
+  ('digest_enabled', '1'),
+  ('cod_block_after_returns', '2')
+ON CONFLICT (key) DO NOTHING;

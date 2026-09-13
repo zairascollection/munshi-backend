@@ -183,7 +183,7 @@ async function sendDailyDigest() {
     "SELECT COUNT(*)::int AS c FROM orders WHERE status = 'Pending' AND confirmation_status <> 'Confirmed'"
   );
   const { rows: low } = await pool.query(
-    "SELECT name, quantity FROM inventory WHERE quantity <= reorder ORDER BY quantity ASC LIMIT 5"
+    "SELECT name, quantity FROM inventory WHERE quantity <= reorder AND alert_enabled = true ORDER BY quantity ASC LIMIT 5"
   );
   const { rows: due } = await pool.query(
     "SELECT COALESCE(SUM(GREATEST(sell - amount_paid, 0)),0) AS total FROM orders WHERE status <> 'Returned'"

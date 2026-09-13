@@ -8,7 +8,7 @@ const inventoryRouter = buildCrudRouter({
     "name", "sku", "category", "quantity", "reorder", "cost", "price", "image",
     "wc_product_id", "wc_variation_id",
     // Variant fields — each size/colour is its own row, grouped by parent_name.
-    "parent_name", "size", "color", "supplier_id",
+    "parent_name", "size", "color", "supplier_id", "alert_enabled",
   ],
   auditLog: true,
   // Any quantity change goes straight back to the website so a POS sale

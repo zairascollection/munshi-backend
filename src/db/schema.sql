@@ -322,3 +322,8 @@ INSERT INTO settings (key, value) VALUES
   ('digest_enabled', '1'),
   ('cod_block_after_returns', '2')
 ON CONFLICT (key) DO NOTHING;
+
+-- ---------- Per-item low-stock alert opt-in ----------
+-- Default false: a shop with one-off pieces would otherwise get an alert
+-- for every single item. The owner turns it on for the lines they restock.
+ALTER TABLE inventory ADD COLUMN IF NOT EXISTS alert_enabled BOOLEAN NOT NULL DEFAULT false;

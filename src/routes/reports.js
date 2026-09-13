@@ -162,7 +162,7 @@ async function generateMonthlySheet(month) {
   const analytics = await buildAnalytics({ from, to });
 
   const { rows: lowStock } = await pool.query(
-    "SELECT name, sku, quantity, reorder FROM inventory WHERE quantity <= reorder ORDER BY quantity ASC"
+    "SELECT name, sku, quantity, reorder FROM inventory WHERE quantity <= reorder AND alert_enabled = true ORDER BY quantity ASC"
   );
   const { rows: stockRow } = await pool.query(
     "SELECT COALESCE(SUM(quantity * cost),0) AS invested, COALESCE(SUM(quantity * price),0) AS retail FROM inventory"

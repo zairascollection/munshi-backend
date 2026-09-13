@@ -35,7 +35,7 @@ async function sendLowStockAlert() {
   if (!isConfigured()) return { sent: false, reason: "Twilio not configured" };
 
   const { rows } = await pool.query(
-    "SELECT name, quantity, reorder FROM inventory WHERE quantity <= reorder ORDER BY quantity ASC"
+    "SELECT name, quantity, reorder FROM inventory WHERE quantity <= reorder AND alert_enabled = true ORDER BY quantity ASC"
   );
   if (rows.length === 0) return { sent: false, reason: "Nothing low on stock" };
 

@@ -34,7 +34,11 @@ function buildCrudRouter({ table, resource, columns, ownerOnly = false, ownerOnl
   });
 
   router.post("/", async (req, res) => {
-    const cols = writableColumns(req);
+    // Only the columns actually present in the request are written. An older
+    // client that doesn't know about a newly added column then gets the
+    // column's DEFAULT instead of a NULL that breaks a NOT NULL constraint.
+    const cols = writableColumns(req).filter((c) => Object.prototype.hasOwnProperty.call(req.body, c));
+    if (cols.length === 0) return res.status(400).json({ error: "Nothing to insert" });
     const values = cols.map((c) => req.body[c]);
     const placeholders = cols.map((_, i) => `$${i + 1}`).join(", ");
     const { rows } = await pool.query(

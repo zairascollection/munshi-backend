@@ -327,3 +327,12 @@ ON CONFLICT (key) DO NOTHING;
 -- Default false: a shop with one-off pieces would otherwise get an alert
 -- for every single item. The owner turns it on for the lines they restock.
 ALTER TABLE inventory ADD COLUMN IF NOT EXISTS alert_enabled BOOLEAN NOT NULL DEFAULT false;
+
+-- Older clients may not send these yet; a NULL is harmless (JS reads it as
+-- falsy / 0) whereas a NOT NULL violation breaks the whole save.
+ALTER TABLE inventory ALTER COLUMN alert_enabled DROP NOT NULL;
+ALTER TABLE orders ALTER COLUMN delivery_charge DROP NOT NULL;
+ALTER TABLE orders ALTER COLUMN return_charge DROP NOT NULL;
+ALTER TABLE orders ALTER COLUMN refund_amount DROP NOT NULL;
+ALTER TABLE orders ALTER COLUMN restocked DROP NOT NULL;
+ALTER TABLE orders ALTER COLUMN confirmation_status DROP NOT NULL;

@@ -44,9 +44,11 @@ router.get("/:id", async (req, res) => {
 // billed_by defaults to whoever is logged in, so every manual/POS bill
 // carries the name of the person who made it even if the UI omits it.
 router.post("/", async (req, res) => {
-  const cols = writableColumns(req);
   const body = { ...req.body };
   if (!body.billed_by) body.billed_by = req.user.name;
+  // Only write what the client sent; anything else takes its DB default.
+  const cols = writableColumns(req).filter((c) => Object.prototype.hasOwnProperty.call(body, c));
+  if (cols.length === 0) return res.status(400).json({ error: "Nothing to insert" });
   const values = cols.map((c) => body[c]);
   const placeholders = cols.map((_, i) => `$${i + 1}`).join(", ");
   const { rows } = await pool.query(
@@ -58,10 +60,12 @@ router.post("/", async (req, res) => {
 });
 
 router.put("/:id", async (req, res) => {
-  const cols = writableColumns(req);
   const { rows: beforeRows } = await pool.query("SELECT * FROM orders WHERE id = $1", [req.params.id]);
   const before = beforeRows[0];
   if (!before) return res.status(404).json({ error: "Not found" });
+
+  const cols = writableColumns(req).filter((c) => Object.prototype.hasOwnProperty.call(req.body, c));
+  if (cols.length === 0) return res.json(scrubForRole(req.user, "orders", before));
 
   const sets = cols.map((c, i) => `${c} = $${i + 1}`).join(", ");
   const values = cols.map((c) => req.body[c]);

@@ -10,7 +10,7 @@ const ordersRoutes = require("./routes/orders");
 const webhookRoutes = require("./routes/webhooks");
 const financeRoutes = require("./routes/finance");
 const reportsRoutes = require("./routes/reports");
-const { inventoryRouter, employeesRouter, affiliatesRouter, accountsRouter, expensesRouter, adSpendRouter, suppliersRouter } = require("./routes/resources");
+const { inventoryRouter, employeesRouter, affiliatesRouter, accountsRouter, expensesRouter, adSpendRouter, suppliersRouter, imageRouter } = require("./routes/resources");
 const { requireAuth, requireResourceAccess } = require("./middleware/auth");
 const { syncRecentOrders } = require("./services/woocommerce");
 const { syncYithAffiliates } = require("./services/yith");
@@ -61,6 +61,8 @@ app.use(express.json({ limit: "5mb" }));
 app.get("/health", (req, res) => res.json({ ok: true }));
 
 app.use("/auth", authRoutes);
+// Image route first: it is public and must not hit the auth middleware.
+app.use("/inventory", imageRouter);
 app.use("/inventory", inventoryRouter);
 app.use("/orders", ordersRoutes);
 app.use("/employees", employeesRouter);

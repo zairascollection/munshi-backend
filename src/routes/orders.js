@@ -183,4 +183,181 @@ router.delete("/:id", requireDeletePermission, async (req, res) => {
   res.status(204).end();
 });
 
+// ---------------------------------------------------------------
+// Payments against an order — the udhaar that gets cleared later.
+//
+// Recording a payment does three things in one transaction: saves the
+// instalment, adds it to the order's running total, and puts the cash
+// into the chosen account. Nothing here ever overwrites amount_paid
+// directly, so the instalments and the total can't drift apart.
+// ---------------------------------------------------------------
+
+// GET /orders/:id/payments — the instalment history for one order
+router.get("/:id/payments", async (req, res) => {
+  const { rows } = await pool.query(
+    `SELECT p.*, a.name AS account_name
+       FROM payments p LEFT JOIN accounts a ON a.id = p.account_id
+      WHERE p.order_id = $1 ORDER BY p.date ASC, p.created_at ASC`,
+    [req.params.id]
+  );
+  res.json(rows);
+});
+
+// POST /orders/:id/payment  { amount, method, accountId, date, note }
+router.post("/:id/payment", async (req, res) => {
+  const { amount, method, accountId, date, note } = req.body || {};
+  const value = Number(amount);
+  if (!value || value <= 0) return res.status(400).json({ error: "Amount 0 se zyada hona chahiye" });
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: orderRows } = await client.query("SELECT * FROM orders WHERE id = $1 FOR UPDATE", [req.params.id]);
+    const order = orderRows[0];
+    if (!order) { await client.query("ROLLBACK"); return res.status(404).json({ error: "Order not found" }); }
+
+    const due = Number(order.sell || 0) - Number(order.amount_paid || 0);
+    if (value > due + 0.01) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: `Baqaya sirf ${Math.round(due)} hai` });
+    }
+
+    const { rows: paymentRows } = await client.query(
+      `INSERT INTO payments (order_id, amount, method, account_id, date, received_by, note)
+       VALUES ($1, $2, $3, $4, COALESCE($5, CURRENT_DATE), $6, $7) RETURNING *`,
+      [req.params.id, value, method || order.method || "Cash", accountId || null, date || null, req.user.name, note || null]
+    );
+
+    const { rows: updated } = await client.query(
+      "UPDATE orders SET amount_paid = COALESCE(amount_paid, 0) + $1, updated_at = now() WHERE id = $2 RETURNING *",
+      [value, req.params.id]
+    );
+
+    if (accountId) {
+      await client.query(
+        "UPDATE accounts SET balance = COALESCE(balance, 0) + $1, updated_at = now() WHERE id = $2",
+        [value, accountId]
+      );
+    }
+
+    await client.query("COMMIT");
+
+    await logChanges({
+      resource: "orders",
+      recordId: req.params.id,
+      recordLabel: `${order.order_no} — ${order.customer}`,
+      before: order,
+      after: updated[0],
+      user: req.user,
+      columns: ["amount_paid"],
+    });
+
+    res.status(201).json({ payment: paymentRows[0], order: scrubForRole(req.user, "orders", updated[0]) });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("Payment failed:", err);
+    res.status(500).json({ error: "Payment save nahi hui", detail: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+// DELETE /orders/:orderId/payment/:paymentId — undo a wrongly entered
+// instalment; reverses the order total and the account balance too.
+router.delete("/:orderId/payment/:paymentId", requireDeletePermission, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query("SELECT * FROM payments WHERE id = $1 AND order_id = $2", [req.params.paymentId, req.params.orderId]);
+    const payment = rows[0];
+    if (!payment) { await client.query("ROLLBACK"); return res.status(404).json({ error: "Payment not found" }); }
+
+    await client.query("DELETE FROM payments WHERE id = $1", [payment.id]);
+    await client.query(
+      "UPDATE orders SET amount_paid = GREATEST(COALESCE(amount_paid,0) - $1, 0), updated_at = now() WHERE id = $2",
+      [Number(payment.amount), req.params.orderId]
+    );
+    if (payment.account_id) {
+      await client.query(
+        "UPDATE accounts SET balance = COALESCE(balance,0) - $1, updated_at = now() WHERE id = $2",
+        [Number(payment.amount), payment.account_id]
+      );
+    }
+    await client.query("COMMIT");
+    res.status(204).end();
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("Payment delete failed:", err);
+    res.status(500).json({ error: "Delete failed", detail: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+// ---------------------------------------------------------------
+// POST /orders/:id/undo-return  { status }
+// Returns get marked by mistake. This puts the order back the way it
+// was: clears the return fields, takes the restocked units out of
+// inventory again, and records the reversal in the change history.
+// ---------------------------------------------------------------
+router.post("/:id/undo-return", async (req, res) => {
+  const nextStatus = ["Pending", "Shipped", "Delivered"].includes(req.body?.status) ? req.body.status : "Delivered";
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: beforeRows } = await client.query("SELECT * FROM orders WHERE id = $1 FOR UPDATE", [req.params.id]);
+    const before = beforeRows[0];
+    if (!before) { await client.query("ROLLBACK"); return res.status(404).json({ error: "Not found" }); }
+    if (before.status !== "Returned") {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "Ye order returned hai hi nahi" });
+    }
+
+    // Only pull stock back out if the return actually put it in.
+    const removed = [];
+    if (before.restocked && before.product) {
+      for (const seg of String(before.product).split(",")) {
+        const m = seg.trim().match(/^(.*)\s+x(\d+(?:\.\d+)?)$/i);
+        const name = m ? m[1].trim() : seg.trim();
+        const qty = m ? Number(m[2]) : Number(before.qty) || 1;
+        if (!name) continue;
+        const { rows: upd } = await client.query(
+          `UPDATE inventory SET quantity = GREATEST(quantity - $1, 0), updated_at = now()
+            WHERE lower(name) = lower($2) RETURNING name, quantity`,
+          [qty, name]
+        );
+        if (upd[0]) removed.push({ name: upd[0].name, removed: qty, newQty: Number(upd[0].quantity) });
+      }
+    }
+
+    const { rows: afterRows } = await client.query(
+      `UPDATE orders
+          SET status = $1, return_reason = NULL, refund_amount = 0, return_charge = 0,
+              restocked = false, returned_at = NULL, updated_at = now()
+        WHERE id = $2 RETURNING *`,
+      [nextStatus, req.params.id]
+    );
+    await client.query("COMMIT");
+
+    await logChanges({
+      resource: "orders",
+      recordId: req.params.id,
+      recordLabel: `${before.order_no} — ${before.customer}`,
+      before,
+      after: afterRows[0],
+      user: req.user,
+      columns: ["status", "return_reason", "refund_amount", "return_charge", "restocked"],
+    });
+
+    res.json({ order: scrubForRole(req.user, "orders", afterRows[0]), removed });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("Undo return failed:", err);
+    res.status(500).json({ error: "Undo failed", detail: err.message });
+  } finally {
+    client.release();
+  }
+});
+
 module.exports = router;

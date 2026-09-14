@@ -336,3 +336,24 @@ ALTER TABLE orders ALTER COLUMN return_charge DROP NOT NULL;
 ALTER TABLE orders ALTER COLUMN refund_amount DROP NOT NULL;
 ALTER TABLE orders ALTER COLUMN restocked DROP NOT NULL;
 ALTER TABLE orders ALTER COLUMN confirmation_status DROP NOT NULL;
+
+-- =====================================================================
+-- v4 — Order payments (udhaar clearing) + return reversal
+-- =====================================================================
+
+-- Every instalment against an order gets its own row, so a bill paid in
+-- three parts has three records instead of one number quietly changing.
+-- orders.amount_paid stays as the running total, kept in sync here.
+CREATE TABLE IF NOT EXISTS payments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  amount NUMERIC NOT NULL,
+  method TEXT,
+  account_id UUID REFERENCES accounts(id),
+  date DATE NOT NULL DEFAULT CURRENT_DATE,
+  received_by TEXT,
+  note TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_payments_order ON payments (order_id);
+CREATE INDEX IF NOT EXISTS idx_payments_date ON payments (date);

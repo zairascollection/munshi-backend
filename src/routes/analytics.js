@@ -215,6 +215,9 @@ async function buildAnalytics({ from, to }) {
     byCourier: group((o) => o.courier),
     byChannel: group((o) => o.channel || (o.source === "woocommerce" ? "Website" : "Manual / POS")),
     byStaff: group((o) => o.billed_by),
+    // Who the sale came through. Falls back to the biller so orders
+    // entered before this field existed still land somewhere sensible.
+    bySeller: group((o) => o.sold_by || o.billed_by),
     byProduct: byProduct.slice(0, 30),
     adByChannel: Object.entries(adByChannel).map(([channel, amount]) => ({ channel, amount: round(amount) })),
     expensesByCategory: expenseByCat.map((e) => ({ category: e.category, amount: n(e.amount) })),

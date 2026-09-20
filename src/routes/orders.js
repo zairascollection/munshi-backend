@@ -11,6 +11,9 @@ const MANUAL_COLUMNS = [
   "order_no", "customer", "phone", "product", "qty", "sell", "cost",
   "courier", "tracking", "status", "amount_paid", "due_date", "method", "date",
   "billed_by", "return_reason", "city", "channel",
+  // Who the sale actually came through (staff member or affiliate), as
+  // opposed to billed_by which is just whoever typed it in.
+  "sold_by", "sold_by_type", "consignment_id",
   "delivery_charge", "return_charge", "refund_amount", "restocked",
   "returned_at", "delivered_at",
 ];

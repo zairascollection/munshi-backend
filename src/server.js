@@ -56,7 +56,7 @@ app.use("/webhooks", express.raw({ type: "application/json" }), webhookRoutes);
 
 // Everything else gets normal JSON body parsing. Limit raised from the
 // 100kb default since inventory photos are sent as base64 in the JSON body.
-app.use(express.json({ limit: "5mb" }));
+app.use(express.json({ limit: "60mb" }));
 
 app.get("/health", (req, res) => res.json({ ok: true }));
 
@@ -78,6 +78,8 @@ app.use("/analytics", require("./routes/analytics"));
 app.use("/suppliers", suppliersRouter);
 app.use("/purchases", require("./routes/purchases"));
 app.use("/customers", require("./routes/customers"));
+app.use("/consignments", require("./routes/consignments"));
+app.use("/backup", require("./routes/backup"));
 app.use("/whatsapp", require("./routes/whatsapp"));
 
 // Push every linked inventory row's quantity back to WooCommerce.

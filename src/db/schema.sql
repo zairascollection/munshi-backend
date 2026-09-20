@@ -357,3 +357,49 @@ CREATE TABLE IF NOT EXISTS payments (
 );
 CREATE INDEX IF NOT EXISTS idx_payments_order ON payments (order_id);
 CREATE INDEX IF NOT EXISTS idx_payments_date ON payments (date);
+
+-- =====================================================================
+-- v5 — Affiliate consignment stock + who the sale came through
+-- =====================================================================
+
+-- Stock handed to an affiliate (or anyone) to sell on our behalf. The
+-- goods have left the shop but are still ours until they sell, so the
+-- inventory count drops and this table records who is holding what.
+CREATE TABLE IF NOT EXISTS consignments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  ref_no TEXT,
+  affiliate_id UUID REFERENCES affiliates(id),
+  holder_name TEXT,                  -- used when the holder isn't a listed affiliate
+  phone TEXT,
+  date DATE NOT NULL DEFAULT CURRENT_DATE,
+  status TEXT NOT NULL DEFAULT 'Out' CHECK (status IN ('Out', 'Partial', 'Settled')),
+  notes TEXT,
+  given_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_consignments_affiliate ON consignments (affiliate_id);
+
+-- qty_out is what went out; sold + returned is what came back one way or
+-- the other. Whatever is left is still sitting with the holder.
+CREATE TABLE IF NOT EXISTS consignment_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  consignment_id UUID NOT NULL REFERENCES consignments(id) ON DELETE CASCADE,
+  inventory_id UUID REFERENCES inventory(id),
+  name TEXT NOT NULL,
+  sku TEXT,
+  qty_out NUMERIC NOT NULL DEFAULT 0,
+  qty_returned NUMERIC NOT NULL DEFAULT 0,
+  qty_sold NUMERIC NOT NULL DEFAULT 0,
+  unit_cost NUMERIC NOT NULL DEFAULT 0,
+  unit_price NUMERIC NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_consignment_items_parent ON consignment_items (consignment_id);
+
+-- billed_by is whoever typed the bill into Munshi. sold_by is the person
+-- or affiliate the sale actually came through — that's what matters when
+-- a customer rings up with a complaint weeks later.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS sold_by TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS sold_by_type TEXT;   -- Staff / Affiliate / Walk-in / Online
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS consignment_id UUID;
+CREATE INDEX IF NOT EXISTS idx_orders_sold_by ON orders (sold_by);

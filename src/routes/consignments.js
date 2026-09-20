@@ -100,7 +100,14 @@ router.get("/:id", async (req, res) => {
   );
   if (!rows[0]) return res.status(404).json({ error: "Not found" });
   const { rows: items } = await pool.query(
-    "SELECT * FROM consignment_items WHERE consignment_id = $1 ORDER BY name",
+    `SELECT ci.*,
+            CASE WHEN inv.image IS NOT NULL
+                 THEN '/inventory/' || inv.id::text || '/image?v=' || EXTRACT(EPOCH FROM inv.updated_at)::bigint::text
+                 ELSE NULL END AS image_url
+       FROM consignment_items ci
+       LEFT JOIN inventory inv ON inv.id = ci.inventory_id
+      WHERE ci.consignment_id = $1
+      ORDER BY ci.name`,
     [req.params.id]
   );
   res.json({ ...rows[0], items: items.map(withRemaining) });

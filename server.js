@@ -63,6 +63,12 @@ app.use("/webhooks", express.raw({ type: "application/json" }), webhookRoutes);
 // 100kb default since inventory photos are sent as base64 in the JSON body.
 app.use(express.json({ limit: "60mb" }));
 
+// Bumped by hand with each shipped change. Open this in a browser to see
+// at a glance whether a deploy actually took — guessing at that has cost
+// real time more than once.
+const BUILD = "2026-09-22-partial-update-fix";
+app.get("/version", (req, res) => res.json({ build: BUILD, started: new Date(Date.now() - process.uptime() * 1000).toISOString() }));
+
 // Deliberately 200 whenever the process is alive, with the database state
 // in the body. Railway checks this during a deploy, and a two-second blip
 // on the database should not mark an otherwise good deploy as failed.

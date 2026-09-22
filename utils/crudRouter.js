@@ -53,12 +53,20 @@ function buildCrudRouter({ table, resource, columns, ownerOnly = false, ownerOnl
   });
 
   router.put("/:id", async (req, res) => {
-    const cols = writableColumns(req);
-    let before = null;
-    if (auditLog) {
-      const { rows } = await pool.query(`SELECT * FROM ${table} WHERE id = $1`, [req.params.id]);
-      before = rows[0] || null;
-    }
+    // Only the columns the client actually sent get written. Without this
+    // filter every untouched column is written as undefined — which reaches
+    // Postgres as NULL — so editing a price would blank the item's name,
+    // photo and stock, and any NOT NULL column would make the whole save
+    // fail. The client sends a patch, so this is not optional.
+    const { rows: beforeRows } = await pool.query(`SELECT * FROM ${table} WHERE id = $1`, [req.params.id]);
+    const before = beforeRows[0] || null;
+    if (!before) return res.status(404).json({ error: "Not found" });
+
+    const cols = writableColumns(req).filter((c) => Object.prototype.hasOwnProperty.call(req.body, c));
+    // Nothing writable in the body — answer with the record unchanged
+    // rather than running an UPDATE with an empty SET clause.
+    if (cols.length === 0) return res.json(scrubForRole(req.user, resource, before));
+
     const sets = cols.map((c, i) => `${c} = $${i + 1}`).join(", ");
     const values = cols.map((c) => req.body[c]);
     const { rows } = await pool.query(

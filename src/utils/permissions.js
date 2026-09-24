@@ -2,10 +2,24 @@
 // reports but can't delete anything and can't touch Team or Accounts),
 // staff (operational only — no cost, salary, profit, finance, delete).
 
-// Always owner-only, regardless of manager status.
-const OWNER_ONLY_RESOURCES = new Set(["accounts", "users", "audit_log"]);
-// Visible to manager and owner, hidden from staff.
-const MANAGER_RESOURCES = new Set(["finance", "expenses", "affiliates", "ad_spend", "settings", "analytics", "suppliers", "purchases"]);
+// Always owner-only.
+//
+// "users" stays here deliberately. A manager who could create accounts
+// could make themselves an owner, or delete the owner — which would undo
+// every other safeguard here, including the change history that the owner
+// relies on to supervise them. Everything else about the business is now
+// open to a manager; only the keys to the building are not.
+//
+// "audit_log" is the owner's supervision record, so the people being
+// supervised do not get to read it.
+const OWNER_ONLY_RESOURCES = new Set(["users", "audit_log"]);
+// Visible to manager and owner, hidden from staff. Accounts moved here:
+// the manager runs the shop day to day, and every change they make to a
+// cash or bank account is written to the history with their name on it.
+const MANAGER_RESOURCES = new Set([
+  "finance", "expenses", "affiliates", "ad_spend", "settings", "analytics",
+  "suppliers", "purchases", "accounts", "consignments", "customers",
+]);
 
 function isOwner(user) {
   return user && user.role === "owner";

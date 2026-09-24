@@ -1,7 +1,7 @@
 const express = require("express");
 const pool = require("../db/pool");
 const { requireAuth, requireResourceAccess, requireDeletePermission } = require("../middleware/auth");
-const { logChanges } = require("../utils/auditLog");
+const { logChanges, logCreate, logDelete } = require("../utils/auditLog");
 
 const router = express.Router();
 router.use(requireAuth);
@@ -59,6 +59,10 @@ router.post("/", async (req, res) => {
       );
     }
     await client.query("COMMIT");
+    await logCreate({
+      resource: "purchases", recordId: po.id,
+      recordLabel: po.po_no || "", row: po, user: req.user,
+    });
     res.status(201).json(po);
   } catch (err) {
     await client.query("ROLLBACK");
@@ -173,7 +177,16 @@ router.post("/:id/receive", async (req, res) => {
 });
 
 router.delete("/:id", requireDeletePermission, async (req, res) => {
+  // Managers can delete purchase orders now, so what was deleted — and by
+  // whom — has to survive the delete.
+  const { rows: before } = await pool.query("SELECT * FROM purchase_orders WHERE id = $1", [req.params.id]);
+  if (!before[0]) return res.status(204).end();
   await pool.query("DELETE FROM purchase_orders WHERE id = $1", [req.params.id]);
+  await logDelete({
+    resource: "purchases", recordId: req.params.id,
+    recordLabel: before[0].po_no || "",
+    row: before[0], user: req.user,
+  });
   res.status(204).end();
 });
 

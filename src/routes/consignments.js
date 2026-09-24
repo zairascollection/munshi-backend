@@ -1,7 +1,7 @@
 const express = require("express");
 const pool = require("../db/pool");
 const { requireAuth, requireDeletePermission } = require("../middleware/auth");
-const { logChanges } = require("../utils/auditLog");
+const { logChanges, logCreate, logDelete } = require("../utils/auditLog");
 const { pushStockSafe } = require("../services/woocommerce");
 
 const router = express.Router();
@@ -198,6 +198,11 @@ router.post("/", async (req, res) => {
 
     await client.query("COMMIT");
     touched.forEach(pushStockSafe);
+    await logCreate({
+      resource: "consignments", recordId: consignment.id,
+      recordLabel: consignment.ref_no || consignment.holder_name || "",
+      row: consignment, user: req.user,
+    });
     res.status(201).json(consignment);
   } catch (err) {
     await client.query("ROLLBACK");
@@ -291,6 +296,11 @@ router.post("/:id/settle", async (req, res) => {
 // changed through settle, never edited by hand.
 router.put("/:id", async (req, res) => {
   const { refNo, holderName, phone, notes, date } = req.body || {};
+  // Read it first — without the old values there is nothing to compare
+  // against, and the history line would say "changed" without saying from what.
+  const { rows: beforeRows } = await pool.query("SELECT * FROM consignments WHERE id = $1", [req.params.id]);
+  const before = beforeRows[0] || null;
+  if (!before) return res.status(404).json({ error: "Not found" });
   const { rows } = await pool.query(
     `UPDATE consignments
         SET ref_no = COALESCE($1, ref_no), holder_name = COALESCE($2, holder_name),
@@ -300,10 +310,17 @@ router.put("/:id", async (req, res) => {
     [refNo, holderName, phone, notes || null, date || null, req.params.id]
   );
   if (!rows[0]) return res.status(404).json({ error: "Not found" });
+  // Managers can edit these now, so the edit has to be traceable.
+  await logChanges({
+    resource: "consignments", recordId: req.params.id,
+    recordLabel: rows[0].ref_no || rows[0].holder_name || "",
+    before, after: rows[0], user: req.user,
+    columns: ["ref_no", "holder_name", "phone", "notes", "date"],
+  });
   res.json(rows[0]);
 });
 
-// DELETE /consignments/:id — owner only. Puts every unsettled unit back
+// DELETE /consignments/:id. Puts every unsettled unit back
 // into inventory so deleting a mistake doesn't lose stock.
 router.delete("/:id", requireDeletePermission, async (req, res) => {
   const client = await pool.connect();
@@ -324,9 +341,21 @@ router.delete("/:id", requireDeletePermission, async (req, res) => {
         if (upd[0]) touched.push(upd[0]);
       }
     }
+    // Read the record before it is gone — after the DELETE there is
+    // nothing left to describe, and "who removed this and what was on it"
+    // is exactly what the owner needs when stock goes missing.
+    const { rows: head } = await client.query("SELECT * FROM consignments WHERE id = $1", [req.params.id]);
     await client.query("DELETE FROM consignments WHERE id = $1", [req.params.id]);
     await client.query("COMMIT");
     touched.forEach(pushStockSafe);
+    if (head[0]) {
+      await logDelete({
+        resource: "consignments", recordId: req.params.id,
+        recordLabel: head[0].ref_no || head[0].holder_name || "",
+        row: { ...head[0], quantity: items.reduce((t, i) => t + Number(i.qty_out || 0), 0) },
+        user: req.user,
+      });
+    }
     res.status(204).end();
   } catch (err) {
     await client.query("ROLLBACK");

@@ -1,7 +1,12 @@
 const express = require("express");
 const pool = require("../db/pool");
 const buildCrudRouter = require("../utils/crudRouter");
-const { pushStockSafe } = require("../services/woocommerce");
+// Pushing stock to the website is a follow-up action, not part of making
+// a sale. If this file is missing from the deploy, inventory must still
+// work — it used to take the whole backend down instead.
+let pushStockSafe = () => {};
+try { ({ pushStockSafe } = require("../services/woocommerce")); }
+catch (err) { console.error("[startup] services/woocommerce missing — website stock push disabled"); }
 
 const inventoryRouter = buildCrudRouter({
   table: "inventory",

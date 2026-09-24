@@ -1,5 +1,6 @@
 const express = require("express");
 const pool = require("../db/pool");
+const { logChanges } = require("../utils/auditLog");
 const { requireAuth } = require("../middleware/auth");
 const { isManagerOrAbove } = require("../utils/permissions");
 
@@ -103,6 +104,8 @@ router.get("/risk/:phone", async (req, res) => {
 router.put("/:phone", async (req, res) => {
   const { name, city, notes, cod_blocked } = req.body || {};
   const phone = String(req.params.phone);
+  const { rows: beforeRows } = await pool.query("SELECT * FROM customers WHERE phone = $1", [phone]);
+  const before = beforeRows[0] || null;
   const { rows } = await pool.query(
     `INSERT INTO customers (phone, name, city, notes, cod_blocked)
      VALUES ($1, $2, $3, $4, COALESCE($5, false))
@@ -115,6 +118,14 @@ router.put("/:phone", async (req, res) => {
      RETURNING *`,
     [phone, name || null, city || null, notes || null, cod_blocked]
   );
+  // Blocking a customer from COD is a decision worth being able to trace
+  // back to a person — it stops that customer ordering on delivery.
+  await logChanges({
+    resource: "customers", recordId: rows[0].id || phone,
+    recordLabel: rows[0].name ? `${rows[0].name} (${phone})` : phone,
+    before: before || {}, after: rows[0], user: req.user,
+    columns: ["name", "city", "notes", "cod_blocked"],
+  });
   res.json(rows[0]);
 });
 

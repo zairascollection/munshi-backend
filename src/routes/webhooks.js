@@ -1,7 +1,11 @@
 const express = require("express");
 const crypto = require("crypto");
 const pool = require("../db/pool");
-const { upsertWooOrder } = require("../services/woocommerce");
+// Same here: without the service file the webhook answers honestly
+// instead of preventing the server from starting at all.
+let upsertWooOrder = null;
+try { ({ upsertWooOrder } = require("../services/woocommerce")); }
+catch (err) { console.error("[startup] services/woocommerce missing — WooCommerce webhook disabled"); }
 
 const router = express.Router();
 
@@ -43,6 +47,9 @@ async function recordProcessed(wcOrderId, topic, deliveryId) {
 // Configure ONE webhook in WooCommerce per topic (order.created, order.updated)
 // pointing here, e.g. https://your-api-domain.com/webhooks/woocommerce
 router.post("/woocommerce", async (req, res) => {
+  if (!upsertWooOrder) {
+    return res.status(503).json({ error: "WooCommerce sync is not available on this server." });
+  }
   if (!verifySignature(req)) {
     return res.status(401).json({ error: "Invalid webhook signature" });
   }

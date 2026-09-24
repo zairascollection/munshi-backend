@@ -1,8 +1,29 @@
 require("dotenv").config();
 
+// A file that is missing from the repo must never take the shop offline.
+// It has, repeatedly: one file left out of an upload and Railway
+// crash-loops with billing, inventory and everything else down.
+//
+// So anything that is a safety net or a background job is loaded through
+// here: missing, it logs loudly, is reported on /version, and the shop
+// keeps trading. The database, auth, orders and inventory below stay hard
+// requires on purpose — without those there is no app to run.
+const OPTIONAL_MISSING = [];
+function optional(modulePath, fallback, note) {
+  try {
+    return require(modulePath);
+  } catch (err) {
+    OPTIONAL_MISSING.push({ file: modulePath, reason: err.message, effect: note });
+    console.error(`[startup] ${modulePath} missing — ${note}`);
+    return fallback;
+  }
+}
+
 // Teaches Express 4 to catch async handler rejections instead of letting
-// them kill the process. Must come before the route files below.
-require("./utils/asyncErrors");
+// them kill the process. Must come before the route files below. Without
+// it the process-level handlers further down still stop a crash, but a
+// failing request hangs instead of answering 500 — degraded, not dead.
+optional("./utils/asyncErrors", null, "async route errors will not be caught cleanly");
 
 const express = require("express");
 const fs = require("fs");
@@ -17,11 +38,15 @@ const financeRoutes = require("./routes/finance");
 const reportsRoutes = require("./routes/reports");
 const { inventoryRouter, employeesRouter, affiliatesRouter, accountsRouter, expensesRouter, adSpendRouter, suppliersRouter, imageRouter } = require("./routes/resources");
 const { requireAuth, requireResourceAccess } = require("./middleware/auth");
-const { syncRecentOrders } = require("./services/woocommerce");
-const { syncYithAffiliates } = require("./services/yith");
-const { sendLowStockAlert } = require("./services/alerts");
-const { pushAllStock } = require("./services/woocommerce");
-const { sendDailyDigest } = require("./services/whatsapp");
+
+// Background jobs and outbound integrations — none of them are needed for
+// the counter to take money, so a missing one is a disabled feature.
+const noop = async () => ({ skipped: true, reason: "feature file missing on server" });
+const woo = optional("./services/woocommerce", { syncRecentOrders: noop, pushAllStock: noop, pushStockSafe: () => {} }, "WooCommerce sync disabled");
+const { syncRecentOrders, pushAllStock } = woo;
+const { syncYithAffiliates } = optional("./services/yith", { syncYithAffiliates: noop }, "affiliate sync disabled");
+const { sendLowStockAlert } = optional("./services/alerts", { sendLowStockAlert: noop }, "low-stock alerts disabled");
+const { sendDailyDigest } = optional("./services/whatsapp", { sendDailyDigest: noop }, "WhatsApp digest disabled");
 
 const app = express();
 
@@ -66,7 +91,7 @@ app.use(express.json({ limit: "60mb" }));
 // Bumped by hand with each shipped change. Open this in a browser to see
 // at a glance whether a deploy actually took — guessing at that has cost
 // real time more than once.
-const BUILD = "2026-09-24-role-matrix";
+const BUILD = "2026-09-24-manager-full-access";
 app.get("/version", (req, res) => {
   const status = app.get("featureStatus") || { mounted: [], failed: [] };
   res.json({
@@ -151,7 +176,7 @@ for (const [mountPath, modulePath] of FEATURES) {
 }
 if (failed.length === 0) console.log(`[startup] all ${mounted.length} feature routes mounted`);
 else console.error(`[startup] ${failed.length} feature route(s) unavailable: ${failed.map((f) => f.route).join(", ")}`);
-app.set("featureStatus", { mounted, failed });
+app.set("featureStatus", { mounted, failed: [...failed, ...OPTIONAL_MISSING] });
 
 // Push every linked inventory row's quantity back to WooCommerce.
 // Manual button in the UI, and a safety net if a single push was missed.

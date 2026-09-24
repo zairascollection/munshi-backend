@@ -67,7 +67,17 @@ app.use(express.json({ limit: "60mb" }));
 // at a glance whether a deploy actually took — guessing at that has cost
 // real time more than once.
 const BUILD = "2026-09-24-role-matrix";
-app.get("/version", (req, res) => res.json({ build: BUILD, started: new Date(Date.now() - process.uptime() * 1000).toISOString() }));
+app.get("/version", (req, res) => {
+  const status = app.get("featureStatus") || { mounted: [], failed: [] };
+  res.json({
+    build: BUILD,
+    started: new Date(Date.now() - process.uptime() * 1000).toISOString(),
+    // Which optional features actually loaded. A non-empty `missing` is the
+    // fastest answer to "why is that screen broken".
+    features: status.mounted,
+    missing: status.failed,
+  });
+});
 
 // Deliberately 200 whenever the process is alive, with the database state
 // in the body. Railway checks this during a deploy, and a two-second blip
@@ -94,17 +104,54 @@ app.use("/affiliates", affiliatesRouter);
 app.use("/accounts", accountsRouter);
 app.use("/expenses", expensesRouter);
 app.use("/finance", financeRoutes);
-app.use("/audit-log", require("./routes/auditLog"));
 app.use("/reports", reportsRoutes);
 app.use("/ad-spend", adSpendRouter);
-app.use("/settings", require("./routes/settings"));
-app.use("/analytics", require("./routes/analytics"));
 app.use("/suppliers", suppliersRouter);
-app.use("/purchases", require("./routes/purchases"));
-app.use("/customers", require("./routes/customers"));
-app.use("/consignments", require("./routes/consignments"));
-app.use("/backup", require("./routes/backup"));
-app.use("/whatsapp", require("./routes/whatsapp"));
+
+// ---------------------------------------------------------------
+// Feature routes, mounted defensively.
+//
+// These used to be plain require() calls at the top level, so one file
+// missing from the repo took the ENTIRE backend down — no billing, no
+// inventory, nothing, for a feature nobody was even using at the time.
+// That has happened more than once after a partial upload.
+//
+// Now a file that fails to load disables only its own feature, says so
+// loudly in the log, and is reported on /version so it can be seen without
+// digging through Railway at all. The core above is deliberately NOT in
+// here: if orders or inventory can't load, the app is not usable and the
+// deploy should fail.
+// ---------------------------------------------------------------
+const FEATURES = [
+  ["/audit-log", "./routes/auditLog"],
+  ["/settings", "./routes/settings"],
+  ["/analytics", "./routes/analytics"],
+  ["/purchases", "./routes/purchases"],
+  ["/customers", "./routes/customers"],
+  ["/consignments", "./routes/consignments"],
+  ["/backup", "./routes/backup"],
+  ["/whatsapp", "./routes/whatsapp"],
+];
+
+const mounted = [];
+const failed = [];
+for (const [mountPath, modulePath] of FEATURES) {
+  try {
+    app.use(mountPath, require(modulePath));
+    mounted.push(mountPath);
+  } catch (err) {
+    failed.push({ route: mountPath, file: modulePath, reason: err.message });
+    console.error(`[startup] ${mountPath} NOT available — ${modulePath} failed to load: ${err.message}`);
+    // Answer this route clearly instead of falling through to a confusing
+    // 404 that looks like a bug in the app.
+    app.use(mountPath, (req, res) =>
+      res.status(503).json({ error: `Ye feature abhi band hai — server par ${modulePath} file maujood nahi.` })
+    );
+  }
+}
+if (failed.length === 0) console.log(`[startup] all ${mounted.length} feature routes mounted`);
+else console.error(`[startup] ${failed.length} feature route(s) unavailable: ${failed.map((f) => f.route).join(", ")}`);
+app.set("featureStatus", { mounted, failed });
 
 // Push every linked inventory row's quantity back to WooCommerce.
 // Manual button in the UI, and a safety net if a single push was missed.

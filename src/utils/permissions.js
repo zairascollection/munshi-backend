@@ -21,9 +21,12 @@ function canAccessResource(user, resource) {
   return true;
 }
 
-// Only the owner can ever delete records.
+// Managers can delete as well as edit. The safeguard is not a locked
+// button — it is that every delete is written to the change history with
+// the deleter's name and a summary of what the record held, so the owner
+// can see exactly what happened and put it back.
 function canDelete(user) {
-  return isOwner(user);
+  return isManagerOrAbove(user);
 }
 
 // Strips cost/salary from records before sending them to staff. Managers

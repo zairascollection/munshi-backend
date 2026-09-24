@@ -83,6 +83,7 @@ const affiliatesRouter = buildCrudRouter({
   resource: "affiliates",
   columns: ["name", "platform", "rate", "sales", "commission", "status", "payment", "account_id"],
   ownerOnly: true,
+  auditLog: true,
 });
 
 const accountsRouter = buildCrudRouter({
@@ -90,6 +91,7 @@ const accountsRouter = buildCrudRouter({
   resource: "accounts",
   columns: ["name", "type", "balance"],
   ownerOnly: true,
+  auditLog: true,
 });
 
 const expensesRouter = buildCrudRouter({

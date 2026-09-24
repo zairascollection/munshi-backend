@@ -2,7 +2,8 @@ const express = require("express");
 const pool = require("../db/pool");
 const { requireAuth, requireDeletePermission } = require("../middleware/auth");
 const { scrubForRole, isManagerOrAbove } = require("../utils/permissions");
-const { logChanges } = require("../utils/auditLog");
+const { logChanges, logCreate, logDelete } = require("../utils/auditLog");
+const { handleDbError } = require("../utils/dbErrors");
 
 const router = express.Router();
 router.use(requireAuth);
@@ -54,11 +55,26 @@ router.post("/", async (req, res) => {
   if (cols.length === 0) return res.status(400).json({ error: "Nothing to insert" });
   const values = cols.map((c) => body[c]);
   const placeholders = cols.map((_, i) => `$${i + 1}`).join(", ");
-  const { rows } = await pool.query(
-    `INSERT INTO orders (${cols.join(", ")}, source)
-     VALUES (${placeholders}, 'manual') RETURNING *`,
-    values
-  );
+
+  let rows;
+  try {
+    ({ rows } = await pool.query(
+      `INSERT INTO orders (${cols.join(", ")}, source)
+       VALUES (${placeholders}, 'manual') RETURNING *`,
+      values
+    ));
+  } catch (err) {
+    return handleDbError(err, res, "Bill save nahi hua");
+  }
+
+  // Writing a bill is the most common action in the shop — it belongs in
+  // the history as much as editing one does.
+  await logCreate({
+    resource: "orders", recordId: rows[0].id,
+    recordLabel: `${rows[0].order_no} — ${rows[0].customer}`,
+    row: rows[0], user: req.user,
+  });
+
   res.status(201).json(scrubForRole(req.user, "orders", rows[0]));
 });
 
@@ -72,10 +88,15 @@ router.put("/:id", async (req, res) => {
 
   const sets = cols.map((c, i) => `${c} = $${i + 1}`).join(", ");
   const values = cols.map((c) => req.body[c]);
-  const { rows } = await pool.query(
-    `UPDATE orders SET ${sets}, updated_at = now() WHERE id = $${cols.length + 1} RETURNING *`,
-    [...values, req.params.id]
-  );
+  let rows;
+  try {
+    ({ rows } = await pool.query(
+      `UPDATE orders SET ${sets}, updated_at = now() WHERE id = $${cols.length + 1} RETURNING *`,
+      [...values, req.params.id]
+    ));
+  } catch (err) {
+    return handleDbError(err, res, "Bill update nahi hua");
+  }
 
   await logChanges({
     resource: "orders",
@@ -182,7 +203,17 @@ router.post("/:id/return", async (req, res) => {
 });
 
 router.delete("/:id", requireDeletePermission, async (req, res) => {
+  const { rows: before } = await pool.query("SELECT * FROM orders WHERE id = $1", [req.params.id]);
+  if (!before[0]) return res.status(204).end();
+
   await pool.query("DELETE FROM orders WHERE id = $1", [req.params.id]);
+
+  // A deleted bill is money that left the books. It must be traceable.
+  await logDelete({
+    resource: "orders", recordId: req.params.id,
+    recordLabel: `${before[0].order_no} — ${before[0].customer}`,
+    row: before[0], user: req.user,
+  });
   res.status(204).end();
 });
 

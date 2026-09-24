@@ -67,4 +67,51 @@ async function writeChanges({ resource, recordId, recordLabel, before, after, us
   );
 }
 
-module.exports = { logChanges };
+
+// ---------------------------------------------------------------
+// Creates and deletes were never recorded — only edits. So adding an item
+// or writing a bill left no trace at all, and a deleted record simply
+// disappeared with no way to find out who removed it. For a business the
+// owner does not personally run, those are the two entries that matter
+// most.
+// ---------------------------------------------------------------
+
+// Fields worth showing on a "added" / "deleted" line. Anything else is
+// noise, and photos would bloat the table.
+const SUMMARY_FIELDS = [
+  "name", "title", "order_no", "customer", "sku", "quantity",
+  "price", "sell", "amount", "salary", "channel", "po_no", "ref_no",
+];
+
+function summarise(row) {
+  if (!row) return "";
+  return SUMMARY_FIELDS
+    .filter((f) => row[f] !== null && row[f] !== undefined && row[f] !== "")
+    .map((f) => `${f}: ${readable(row[f])}`)
+    .join(" · ");
+}
+
+async function logLifecycle({ resource, recordId, recordLabel, row, user, action }) {
+  try {
+    await pool.query(
+      `INSERT INTO audit_log (resource, record_id, record_label, field, old_value, new_value, changed_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        resource,
+        recordId,
+        recordLabel || "",
+        action,                                   // "Added" or "Deleted"
+        action === "Deleted" ? summarise(row) : "",
+        action === "Added" ? summarise(row) : "",
+        `${user.name} (${user.email})`,
+      ]
+    );
+  } catch (err) {
+    console.error(`[audit] could not record ${action}:`, err.message);
+  }
+}
+
+const logCreate = (args) => logLifecycle({ ...args, action: "Added" });
+const logDelete = (args) => logLifecycle({ ...args, action: "Deleted" });
+
+module.exports = { logChanges, logCreate, logDelete };

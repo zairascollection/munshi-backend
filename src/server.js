@@ -1,4 +1,9 @@
 require("dotenv").config();
+
+// Teaches Express 4 to catch async handler rejections instead of letting
+// them kill the process. Must come before the route files below.
+require("./utils/asyncErrors");
+
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
@@ -58,7 +63,26 @@ app.use("/webhooks", express.raw({ type: "application/json" }), webhookRoutes);
 // 100kb default since inventory photos are sent as base64 in the JSON body.
 app.use(express.json({ limit: "60mb" }));
 
-app.get("/health", (req, res) => res.json({ ok: true }));
+// Bumped by hand with each shipped change. Open this in a browser to see
+// at a glance whether a deploy actually took — guessing at that has cost
+// real time more than once.
+const BUILD = "2026-09-24-role-matrix";
+app.get("/version", (req, res) => res.json({ build: BUILD, started: new Date(Date.now() - process.uptime() * 1000).toISOString() }));
+
+// Deliberately 200 whenever the process is alive, with the database state
+// in the body. Railway checks this during a deploy, and a two-second blip
+// on the database should not mark an otherwise good deploy as failed.
+app.get("/health", async (req, res) => {
+  const dbOk = await pool.isHealthy();
+  res.json({ ok: true, db: dbOk ? "up" : "down", uptime: Math.round(process.uptime()) });
+});
+
+// The strict version, for monitoring rather than deploys: 503 when the
+// database cannot be reached, so an uptime checker can actually alert.
+app.get("/health/db", async (req, res) => {
+  const dbOk = await pool.isHealthy();
+  res.status(dbOk ? 200 : 503).json({ ok: dbOk, db: dbOk ? "up" : "down" });
+});
 
 app.use("/auth", authRoutes);
 // Image route first: it is public and must not hit the auth middleware.
@@ -232,7 +256,45 @@ const PORT = process.env.PORT || 4000;
     // Don't crash the whole app over this — the API can still come up and
     // the error will be visible in the logs for debugging.
   }
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     console.log(`Munshi backend listening on port ${PORT}`);
   });
+
+  // A request that hangs longer than this is never coming back; freeing
+  // the socket stops slow requests piling up until the container dies.
+  server.requestTimeout = 60000;
+  server.headersTimeout = 65000;
+  // Must exceed the platform proxy's idle timeout, or the proxy hands a
+  // connection to a socket Node has already closed and the user sees a
+  // random 502.
+  server.keepAliveTimeout = 72000;
+
+  // ---------- Last-resort safety net ----------
+  // With the pool listener and the async-route patch in place these should
+  // stay quiet. If one does fire, the reason is logged with a stack rather
+  // than the process vanishing and leaving nothing in the logs.
+  process.on("unhandledRejection", (reason) => {
+    console.error("[unhandledRejection] server staying up:", reason instanceof Error ? reason.stack : reason);
+  });
+
+  process.on("uncaughtException", (err) => {
+    // Unlike a rejection, an uncaught throw leaves state unknown. Log it,
+    // stop taking new requests, let the platform start a clean container.
+    console.error("[uncaughtException] shutting down cleanly:", err.stack || err);
+    server.close(() => process.exit(1));
+    setTimeout(() => process.exit(1), 5000).unref();
+  });
+
+  // Railway sends SIGTERM on every redeploy. Finishing in-flight requests
+  // before exiting is the difference between a clean deploy and a handful
+  // of failed saves each time.
+  const shutdown = (signal) => {
+    console.log(`[${signal}] draining requests before exit...`);
+    server.close(() => {
+      pool.end().finally(() => process.exit(0));
+    });
+    setTimeout(() => process.exit(0), 10000).unref();
+  };
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 })();

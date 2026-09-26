@@ -1,15 +1,22 @@
-// Turns an order's product summary back into line items with photos.
+// Works out which products a bill was actually made of.
 //
-// Orders do not store item ids. Both the POS and the WooCommerce sync
-// write a single summary string — "Lawn Suit x2, Dupatta x1" — and that
-// is all a bill from six months ago has. The returns code already parses
-// it to put stock back, so the same parse is reused here to find each
-// item's picture.
+// Two eras of data:
 //
-// Doing it this way (rather than storing ids on new orders only) means
-// every order that already exists gets its photos too, which is exactly
-// what was asked for. If an item was renamed or deleted since the sale,
-// the line simply has no photo — the bill still reads correctly.
+//   New bills store the inventory ids outright (orders.items), so there is
+//   nothing to guess.
+//
+//   Older bills — and every WooCommerce order — have only a summary
+//   string: "3PC x1, 2pc x1". That is matched back to stock by name, and
+//   THAT is where care is needed: this shop reuses names heavily, with
+//   many different products all called "3PC" or "2pc". Matching on name
+//   alone put the first "3PC"'s photo on every bill that mentioned a
+//   "3PC", which is worse than showing no photo at all — the owner reads
+//   the picture as fact.
+//
+// So when a name matches more than one product, the price and cost on the
+// order are used to narrow it down, and if that still leaves a choice the
+// line gets NO photo and is marked ambiguous. A blank is honest; a
+// confident wrong picture is not.
 
 // "Lawn Suit x2" -> { name: "Lawn Suit", qty: 2 }
 function parseSegment(segment, fallbackQty) {
@@ -28,39 +35,103 @@ function parseProductSummary(product, fallbackQty) {
     .filter(Boolean);
 }
 
-// Builds a lowercase name -> { id, imageUrl, price } lookup from inventory
-// rows. Built once per request, not once per order.
-function buildLookup(inventoryRows) {
+const imageUrlFor = (row) =>
+  row && row.has_image
+    ? `/inventory/${row.id}/image?v=${row.updated_at ? new Date(row.updated_at).getTime() : 0}`
+    : null;
+
+// name -> every product with that name. Plural on purpose: the duplicates
+// are the whole problem.
+function groupByName(inventoryRows) {
   const byName = new Map();
   for (const row of inventoryRows || []) {
     const key = String(row.name || "").trim().toLowerCase();
-    if (!key || byName.has(key)) continue;
-    const stamp = row.updated_at ? new Date(row.updated_at).getTime() : 0;
-    byName.set(key, {
-      id: row.id,
-      price: row.price,
-      imageUrl: row.has_image ? `/inventory/${row.id}/image?v=${stamp}` : null,
-    });
+    if (!key) continue;
+    if (!byName.has(key)) byName.set(key, []);
+    byName.get(key).push(row);
   }
   return byName;
 }
 
-// Attaches `items` to each order. Every item carries whatever could be
-// matched; nothing is invented.
+const byId = (inventoryRows) => new Map((inventoryRows || []).map((r) => [String(r.id), r]));
+
+const near = (a, b) => {
+  const x = Number(a), y = Number(b);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+  return Math.abs(x - y) < 0.5;          // money, rounded to the rupee
+};
+
+// Several products share this name. Try to tell them apart by what the
+// order says it charged and what it cost. Only a single survivor counts.
+function narrowByMoney(candidates, order, line) {
+  const lines = parseProductSummary(order.product, order.qty).length;
+  // On a multi-item bill the totals cover every line, so they say nothing
+  // about any one of them.
+  if (lines !== 1) return null;
+
+  const qty = Number(line.qty) || 1;
+  const unitSell = Number(order.sell) / qty;
+  const unitCost = Number(order.cost) / qty;
+
+  for (const field of ["cost", "price"]) {
+    const target = field === "cost" ? unitCost : unitSell;
+    if (!Number.isFinite(target) || target <= 0) continue;
+    const hits = candidates.filter((c) => near(c[field], target));
+    if (hits.length === 1) return hits[0];
+  }
+  return null;
+}
+
+// Attaches `items` to each order: what was sold, and its photo when — and
+// only when — the product can be identified beyond doubt.
 function attachItems(orders, inventoryRows) {
-  const lookup = buildLookup(inventoryRows);
+  const byName = groupByName(inventoryRows);
+  const ids = byId(inventoryRows);
+
   return (orders || []).map((order) => {
+    // Recorded at the till: exact, no matching needed.
+    const stored = Array.isArray(order.items) ? order.items : null;
+    if (stored && stored.length > 0) {
+      const items = stored.map((it) => {
+        const row = ids.get(String(it.id));
+        return {
+          name: it.name,
+          qty: Number(it.qty) || 1,
+          price: it.price === undefined ? null : it.price,
+          inventoryId: row ? row.id : null,
+          imageUrl: imageUrlFor(row),
+          ambiguous: false,
+          exact: true,
+        };
+      });
+      return { ...order, items };
+    }
+
     const items = parseProductSummary(order.product, order.qty).map((line) => {
-      const match = lookup.get(line.name.toLowerCase());
+      const candidates = byName.get(line.name.toLowerCase()) || [];
+      let match = null;
+      let ambiguous = false;
+
+      if (candidates.length === 1) {
+        match = candidates[0];
+      } else if (candidates.length > 1) {
+        match = narrowByMoney(candidates, order, line);
+        // Still more than one possibility: say so and show no picture.
+        ambiguous = !match;
+      }
+
       return {
         name: line.name,
         qty: line.qty,
+        price: null,
         inventoryId: match ? match.id : null,
-        imageUrl: match ? match.imageUrl : null,
+        imageUrl: imageUrlFor(match),
+        ambiguous,
+        exact: false,
       };
     });
     return { ...order, items };
   });
 }
 
-module.exports = { parseProductSummary, buildLookup, attachItems };
+module.exports = { parseProductSummary, groupByName, attachItems };

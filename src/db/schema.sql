@@ -403,3 +403,12 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS sold_by TEXT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS sold_by_type TEXT;   -- Staff / Affiliate / Walk-in / Online
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS consignment_id UUID;
 CREATE INDEX IF NOT EXISTS idx_orders_sold_by ON orders (sold_by);
+
+-- The exact items a bill was made of.
+--
+-- Orders only ever stored a summary string ("3PC x1, 2pc x1"). This shop
+-- reuses the same names across many different products, so matching that
+-- string back to stock put the same photo on dozens of unrelated bills.
+-- New bills record the inventory ids outright, which removes the guess.
+-- [{ id, name, qty, price }]
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS items JSONB;

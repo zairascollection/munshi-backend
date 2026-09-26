@@ -19,6 +19,9 @@ const MANUAL_COLUMNS = [
   "sold_by", "sold_by_type", "consignment_id",
   "delivery_charge", "return_charge", "refund_amount", "restocked",
   "returned_at", "delivered_at",
+  // The exact items the bill was made of, recorded at the till so the
+  // product never has to be guessed from its name later.
+  "items",
 ];
 
 // Staff can't write cost. Managers and owners can (they can see it too).
@@ -40,7 +43,7 @@ router.get("/", async (req, res) => {
   // NULL` is read as a boolean so a hundred base64 photos never travel
   // just to decide whether a thumbnail exists.
   const { rows: stock } = await pool.query(
-    "SELECT id, name, price, updated_at, (image IS NOT NULL) AS has_image FROM inventory"
+    "SELECT id, name, price, cost, updated_at, (image IS NOT NULL) AS has_image FROM inventory"
   );
   res.json(attachItems(rows, stock).map((r) => scrubForRole(req.user, "orders", r)));
 });
@@ -49,7 +52,7 @@ router.get("/:id", async (req, res) => {
   const { rows } = await pool.query("SELECT * FROM orders WHERE id = $1", [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: "Not found" });
   const { rows: stock } = await pool.query(
-    "SELECT id, name, price, updated_at, (image IS NOT NULL) AS has_image FROM inventory"
+    "SELECT id, name, price, cost, updated_at, (image IS NOT NULL) AS has_image FROM inventory"
   );
   res.json(scrubForRole(req.user, "orders", attachItems(rows, stock)[0]));
 });
@@ -87,7 +90,12 @@ router.post("/", async (req, res) => {
     row: rows[0], user: req.user,
   });
 
-  res.status(201).json(scrubForRole(req.user, "orders", rows[0]));
+  // Same shape as the list: the client merges this straight into its
+  // state, so the new bill must already carry its resolved line items.
+  const { rows: stock } = await pool.query(
+    "SELECT id, name, price, cost, updated_at, (image IS NOT NULL) AS has_image FROM inventory"
+  );
+  res.status(201).json(scrubForRole(req.user, "orders", attachItems(rows, stock)[0]));
 });
 
 router.put("/:id", async (req, res) => {

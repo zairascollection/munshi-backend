@@ -91,7 +91,7 @@ app.use(express.json({ limit: "60mb" }));
 // Bumped by hand with each shipped change. Open this in a browser to see
 // at a glance whether a deploy actually took — guessing at that has cost
 // real time more than once.
-const BUILD = "2026-09-26b-exact-items";
+const BUILD = "2026-09-26c-fix-bill-items";
 app.get("/version", (req, res) => {
   const status = app.get("featureStatus") || { mounted: [], failed: [] };
   res.json({

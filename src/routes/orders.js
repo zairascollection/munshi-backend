@@ -7,6 +7,11 @@ const { handleDbError } = require("../utils/dbErrors");
 
 const { attachItems } = require("../utils/orderItems");
 
+// Everything needed to identify a product and show it, without dragging
+// a single base64 photo across the wire.
+const STOCK_FOR_MATCHING =
+  "SELECT id, name, price, cost, size, color, parent_name, updated_at, (image IS NOT NULL) AS has_image FROM inventory";
+
 const router = express.Router();
 router.use(requireAuth);
 
@@ -43,7 +48,7 @@ router.get("/", async (req, res) => {
   // NULL` is read as a boolean so a hundred base64 photos never travel
   // just to decide whether a thumbnail exists.
   const { rows: stock } = await pool.query(
-    "SELECT id, name, price, cost, updated_at, (image IS NOT NULL) AS has_image FROM inventory"
+    STOCK_FOR_MATCHING
   );
   res.json(attachItems(rows, stock).map((r) => scrubForRole(req.user, "orders", r)));
 });
@@ -52,7 +57,7 @@ router.get("/:id", async (req, res) => {
   const { rows } = await pool.query("SELECT * FROM orders WHERE id = $1", [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: "Not found" });
   const { rows: stock } = await pool.query(
-    "SELECT id, name, price, cost, updated_at, (image IS NOT NULL) AS has_image FROM inventory"
+    STOCK_FOR_MATCHING
   );
   res.json(scrubForRole(req.user, "orders", attachItems(rows, stock)[0]));
 });
@@ -93,7 +98,7 @@ router.post("/", async (req, res) => {
   // Same shape as the list: the client merges this straight into its
   // state, so the new bill must already carry its resolved line items.
   const { rows: stock } = await pool.query(
-    "SELECT id, name, price, cost, updated_at, (image IS NOT NULL) AS has_image FROM inventory"
+    STOCK_FOR_MATCHING
   );
   res.status(201).json(scrubForRole(req.user, "orders", attachItems(rows, stock)[0]));
 });
@@ -129,6 +134,89 @@ router.put("/:id", async (req, res) => {
   });
 
   res.json(scrubForRole(req.user, "orders", rows[0]));
+});
+
+// ---------------------------------------------------------------
+// PUT /orders/:id/items   { items: [{ id, qty, price }], updateTotals }
+//
+// Corrects which products a bill was for. Bills used to record only a
+// name, and this shop gives many different dresses the same name ("3PC",
+// "2pc"), so older bills cannot be traced to the dress that was actually
+// sold. This lets the owner say which one it was — after that the bill
+// carries real inventory ids and always shows the right picture.
+//
+// Money is left alone unless `updateTotals` is asked for: correcting a
+// photo must never quietly change what a customer was charged.
+// ---------------------------------------------------------------
+router.put("/:id/items", async (req, res) => {
+  const { items, updateTotals } = req.body || {};
+  if (!Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ error: "Kam az kam ek item chunein" });
+  }
+
+  const { rows: beforeRows } = await pool.query("SELECT * FROM orders WHERE id = $1", [req.params.id]);
+  const before = beforeRows[0];
+  if (!before) return res.status(404).json({ error: "Not found" });
+
+  const ids = items.map((it) => String(it.id)).filter(Boolean);
+  const { rows: stock } = await pool.query(
+    `${STOCK_FOR_MATCHING} WHERE id = ANY($1::uuid[])`, [ids]
+  );
+  const byId = new Map(stock.map((r) => [String(r.id), r]));
+
+  // Every line must point at a product that exists, or the bill would end
+  // up storing an id that resolves to nothing — the same silent breakage
+  // in a new disguise.
+  const missing = ids.filter((id) => !byId.has(id));
+  if (missing.length > 0) {
+    return res.status(400).json({ error: "Koi item ab stock mein maujood nahi — dobara chunein." });
+  }
+
+  const clean = items.map((it) => {
+    const row = byId.get(String(it.id));
+    const qty = Math.max(1, Number(it.qty) || 1);
+    const price = it.price === undefined || it.price === null || it.price === ""
+      ? Number(row.price) || 0
+      : Number(it.price) || 0;
+    return { id: row.id, name: row.name, qty, price };
+  });
+
+  const product = clean.map((it) => `${it.name} x${it.qty}`).join(", ");
+  const totalQty = clean.reduce((t, it) => t + it.qty, 0);
+
+  const sets = ["items = $1", "product = $2", "qty = $3"];
+  const values = [JSON.stringify(clean), product, totalQty];
+  if (updateTotals) {
+    values.push(clean.reduce((t, it) => t + it.price * it.qty, 0));
+    sets.push(`sell = $${values.length}`);
+    values.push(clean.reduce((t, it) => t + (Number(byId.get(String(it.id)).cost) || 0) * it.qty, 0));
+    sets.push(`cost = $${values.length}`);
+  }
+  values.push(req.params.id);
+
+  let updated;
+  try {
+    ({ rows: updated } = await pool.query(
+      `UPDATE orders SET ${sets.join(", ")}, updated_at = now() WHERE id = $${values.length} RETURNING *`,
+      values
+    ));
+  } catch (err) {
+    return handleDbError(err, res, "Bill update nahi hua");
+  }
+
+  await logChanges({
+    resource: "orders",
+    recordId: req.params.id,
+    recordLabel: before.order_no || "",
+    before, after: updated[0], user: req.user,
+    // "items" is the one that matters: when a bill is corrected from one
+    // "3PC" to a different "3PC", the summary text does not change at
+    // all, so without this the correction would leave no trace.
+    columns: updateTotals ? ["items", "product", "qty", "sell", "cost"] : ["items", "product", "qty"],
+  });
+
+  const { rows: allStock } = await pool.query(STOCK_FOR_MATCHING);
+  res.json(scrubForRole(req.user, "orders", attachItems(updated, allStock)[0]));
 });
 
 // ---------------------------------------------------------------

@@ -18,6 +18,14 @@
 // line gets NO photo and is marked ambiguous. A blank is honest; a
 // confident wrong picture is not.
 
+function readStoredItems(value) {
+  let v = value;
+  if (typeof v === "string") {
+    try { v = JSON.parse(v); } catch { return null; }
+  }
+  return Array.isArray(v) ? v : null;
+}
+
 // "Lawn Suit x2" -> { name: "Lawn Suit", qty: 2 }
 function parseSegment(segment, fallbackQty) {
   const text = String(segment || "").trim();
@@ -89,8 +97,11 @@ function attachItems(orders, inventoryRows) {
   const ids = byId(inventoryRows);
 
   return (orders || []).map((order) => {
-    // Recorded at the till: exact, no matching needed.
-    const stored = Array.isArray(order.items) ? order.items : null;
+    // Recorded at the till: exact, no matching needed. The column may
+    // arrive parsed (JSONB) or as a JSON string, depending on the driver
+    // and column type — both must work, or a bill silently falls back to
+    // guessing by name again.
+    const stored = readStoredItems(order.items);
     if (stored && stored.length > 0) {
       const items = stored.map((it) => {
         const row = ids.get(String(it.id));
@@ -128,6 +139,16 @@ function attachItems(orders, inventoryRows) {
         imageUrl: imageUrlFor(match),
         ambiguous,
         exact: false,
+        // When the name is shared, hand back the products it could have
+        // been. The owner knows which dress they sold — one tap and the
+        // bill is corrected for good.
+        candidates: ambiguous
+          ? candidates.slice(0, 12).map((c) => ({
+              id: c.id, name: c.name, price: c.price, cost: c.cost,
+              size: c.size, color: c.color, parentName: c.parent_name,
+              imageUrl: imageUrlFor(c),
+            }))
+          : undefined,
       };
     });
     return { ...order, items };

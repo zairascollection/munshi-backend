@@ -19,8 +19,32 @@ function fingerprint(s) {
   return h.toString(36).slice(0, 6);
 }
 
+// Accepts the column however it arrives — a parsed array from JSONB, or
+// a JSON string from a driver or column type that hands back text.
+function asLineItems(value) {
+  let v = value;
+  if (typeof v === "string") {
+    const t = v.trim();
+    if (!t.startsWith("[")) return null;
+    try { v = JSON.parse(t); } catch { return null; }
+  }
+  if (!Array.isArray(v)) return null;
+  if (v.length > 0 && typeof v[0] !== "object") return null;
+  return v;
+}
+
 function readable(value) {
   if (value === null || value === undefined) return "";
+
+  // An order's line items. Shown as the bill reads, because "which dress
+  // was this bill for" is precisely what the owner is checking.
+  const lines = asLineItems(value);
+  if (lines) {
+    return lines.length === 0
+      ? "(koi item nahi)"
+      : lines.map((l) => `${l.name || l.id} x${l.qty || 1}`).join(", ");
+  }
+
   const s = String(value);
   if (s.startsWith("data:image")) {
     return `(photo · ${Math.max(1, Math.round(s.length / 1024))} KB · ${fingerprint(s)})`;

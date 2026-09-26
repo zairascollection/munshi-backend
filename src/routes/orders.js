@@ -24,14 +24,32 @@ const MANUAL_COLUMNS = [
   "sold_by", "sold_by_type", "consignment_id",
   "delivery_charge", "return_charge", "refund_amount", "restocked",
   "returned_at", "delivered_at",
-  // The exact items the bill was made of, recorded at the till so the
-  // product never has to be guessed from its name later.
-  "items",
 ];
 
+// `items` is writable ONLY when the bill is created, or through
+// PUT /orders/:id/items which validates every id against stock. The
+// generic PUT must never touch it: the client holds an enriched copy of
+// this column (photo urls, match flags), and a routine save would write
+// that decoration back over the real record and lose the products.
+const CREATE_COLUMNS = [...MANUAL_COLUMNS, "items"];
+
+// Only the fields a line item is allowed to carry into the database.
+function cleanItems(value) {
+  if (!Array.isArray(value)) return null;
+  const items = value
+    .filter((it) => it && it.id)
+    .map((it) => ({
+      id: String(it.id),
+      name: String(it.name || ""),
+      qty: Math.max(1, Number(it.qty) || 1),
+      price: Number(it.price) || 0,
+    }));
+  return items.length > 0 ? items : null;
+}
+
 // Staff can't write cost. Managers and owners can (they can see it too).
-const writableColumns = (req) =>
-  isManagerOrAbove(req.user) ? MANUAL_COLUMNS : MANUAL_COLUMNS.filter((c) => c !== "cost");
+const writableColumns = (req, list = MANUAL_COLUMNS) =>
+  isManagerOrAbove(req.user) ? list : list.filter((c) => c !== "cost");
 
 router.get("/", async (req, res) => {
   const { status, source, from, to } = req.query;
@@ -70,8 +88,16 @@ router.get("/:id", async (req, res) => {
 router.post("/", async (req, res) => {
   const body = { ...req.body };
   if (!body.billed_by) body.billed_by = req.user.name;
+  // Strip the line items down to what belongs in the column. The client
+  // reads this field back decorated with photo urls and match flags, and
+  // none of that should ever be stored.
+  if ("items" in body) {
+    const items = cleanItems(body.items);
+    if (items) body.items = JSON.stringify(items);
+    else delete body.items;
+  }
   // Only write what the client sent; anything else takes its DB default.
-  const cols = writableColumns(req).filter((c) => Object.prototype.hasOwnProperty.call(body, c));
+  const cols = writableColumns(req, CREATE_COLUMNS).filter((c) => Object.prototype.hasOwnProperty.call(body, c));
   if (cols.length === 0) return res.status(400).json({ error: "Nothing to insert" });
   const values = cols.map((c) => body[c]);
   const placeholders = cols.map((_, i) => `$${i + 1}`).join(", ");

@@ -5,6 +5,8 @@ const { scrubForRole, isManagerOrAbove } = require("../utils/permissions");
 const { logChanges, logCreate, logDelete } = require("../utils/auditLog");
 const { handleDbError } = require("../utils/dbErrors");
 
+const { attachItems } = require("../utils/orderItems");
+
 const router = express.Router();
 router.use(requireAuth);
 
@@ -33,13 +35,23 @@ router.get("/", async (req, res) => {
   if (to) { values.push(to); clauses.push(`date <= $${values.length}`); }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const { rows } = await pool.query(`SELECT * FROM orders ${where} ORDER BY date DESC, created_at DESC`, values);
-  res.json(rows.map((r) => scrubForRole(req.user, "orders", r)));
+
+  // One extra query for the whole list, not one per order. `image IS NOT
+  // NULL` is read as a boolean so a hundred base64 photos never travel
+  // just to decide whether a thumbnail exists.
+  const { rows: stock } = await pool.query(
+    "SELECT id, name, price, updated_at, (image IS NOT NULL) AS has_image FROM inventory"
+  );
+  res.json(attachItems(rows, stock).map((r) => scrubForRole(req.user, "orders", r)));
 });
 
 router.get("/:id", async (req, res) => {
   const { rows } = await pool.query("SELECT * FROM orders WHERE id = $1", [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: "Not found" });
-  res.json(scrubForRole(req.user, "orders", rows[0]));
+  const { rows: stock } = await pool.query(
+    "SELECT id, name, price, updated_at, (image IS NOT NULL) AS has_image FROM inventory"
+  );
+  res.json(scrubForRole(req.user, "orders", attachItems(rows, stock)[0]));
 });
 
 // Manually-entered order (POS sale, or a parcel added by hand before

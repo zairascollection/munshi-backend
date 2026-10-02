@@ -85,7 +85,7 @@ router.get("/", async (req, res) => {
          SELECT consignment_id,
                 ARRAY_AGG('/inventory/' || inv.id::text || '/image?v=' ||
                           EXTRACT(EPOCH FROM inv.updated_at)::bigint::text
-                          ORDER BY ci.created_at) AS images
+                          ORDER BY ci.name) AS images
            FROM consignment_items ci
            JOIN inventory inv ON inv.id = ci.inventory_id AND inv.image IS NOT NULL
           GROUP BY consignment_id

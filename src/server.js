@@ -91,7 +91,7 @@ app.use(express.json({ limit: "60mb" }));
 // Bumped by hand with each shipped change. Open this in a browser to see
 // at a glance whether a deploy actually took — guessing at that has cost
 // real time more than once.
-const BUILD = "2026-10-02-business-pack";
+const BUILD = "2026-10-02b-returns-and-bills";
 app.get("/version", (req, res) => {
   const status = app.get("featureStatus") || { mounted: [], failed: [] };
   res.json({
@@ -156,7 +156,16 @@ const FEATURES = [
   ["/consignments", "./routes/consignments"],
   ["/backup", "./routes/backup"],
   ["/whatsapp", "./routes/whatsapp"],
+  ["/supplier-returns", "./routes/supplierReturns"],
 ];
+
+// The supplier bill photo is served without a token, like inventory
+// photos, because an <img> tag cannot send one.
+try {
+  app.use("/purchases", require("./routes/purchases").billRouter);
+} catch (err) {
+  console.error(`[startup] purchase bill images unavailable: ${err.message}`);
+}
 
 const mounted = [];
 const failed = [];

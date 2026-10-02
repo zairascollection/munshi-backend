@@ -3,6 +3,39 @@ const pool = require("../db/pool");
 const { requireAuth, requireResourceAccess, requireDeletePermission } = require("../middleware/auth");
 const { logChanges, logCreate, logDelete } = require("../utils/auditLog");
 
+
+// The supplier's own bill is a photo, often a megabyte of it. It is
+// never sent inside a list — only a cacheable link, exactly as inventory
+// photos are handled — or one slow screen becomes a very slow one.
+const billUrl = (row) =>
+  row && row.has_bill
+    ? `/purchases/${row.id}/bill-image?v=${row.updated_at ? new Date(row.updated_at).getTime() : 0}`
+    : null;
+
+const stripBill = (row) => {
+  const { bill_image, has_bill, ...rest } = row;
+  return { ...rest, bill_image: null, bill_image_url: billUrl(row) };
+};
+
+// Served before the auth middleware, for the same reason inventory
+// photos are: a browser <img> tag cannot attach a token. The URL carries
+// a random id, and nothing else about the business is exposed.
+const billRouter = express.Router();
+billRouter.get("/:id/bill-image", async (req, res) => {
+  try {
+    const { rows } = await pool.query("SELECT bill_image FROM purchase_orders WHERE id = $1", [req.params.id]);
+    const raw = rows[0] && rows[0].bill_image;
+    if (!raw) return res.status(404).end();
+    const m = /^data:([^;]+);base64,(.*)$/.exec(raw);
+    if (!m) return res.status(404).end();
+    res.setHeader("Content-Type", m[1]);
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    res.end(Buffer.from(m[2], "base64"));
+  } catch {
+    res.status(404).end();
+  }
+});
+
 const router = express.Router();
 router.use(requireAuth);
 router.use(requireResourceAccess("purchases"));
@@ -10,7 +43,10 @@ router.use(requireResourceAccess("purchases"));
 // GET /purchases — every PO with its supplier name and item count
 router.get("/", async (req, res) => {
   const { rows } = await pool.query(
-    `SELECT po.*, s.name AS supplier_name,
+    `SELECT po.id, po.po_no, po.supplier_id, po.date, po.notes, po.total,
+            po.amount_paid, po.status, po.created_by, po.created_at, po.updated_at,
+            po.bill_amount, (po.bill_image IS NOT NULL) AS has_bill,
+            s.name AS supplier_name,
             COALESCE(i.item_count, 0)::int AS item_count
        FROM purchase_orders po
        LEFT JOIN suppliers s ON s.id = po.supplier_id
@@ -18,12 +54,16 @@ router.get("/", async (req, res) => {
               ON i.po_id = po.id
       ORDER BY po.date DESC, po.created_at DESC`
   );
-  res.json(rows);
+  res.json(rows.map(stripBill));
 });
 
 router.get("/:id", async (req, res) => {
   const { rows } = await pool.query(
-    `SELECT po.*, s.name AS supplier_name FROM purchase_orders po
+    `SELECT po.id, po.po_no, po.supplier_id, po.date, po.notes, po.total,
+            po.amount_paid, po.status, po.created_by, po.created_at, po.updated_at,
+            po.bill_amount, (po.bill_image IS NOT NULL) AS has_bill,
+            s.name AS supplier_name
+       FROM purchase_orders po
       LEFT JOIN suppliers s ON s.id = po.supplier_id WHERE po.id = $1`,
     [req.params.id]
   );
@@ -40,12 +80,12 @@ router.get("/:id", async (req, res) => {
       WHERE poi.po_id = $1 ORDER BY poi.name`,
     [req.params.id]
   );
-  res.json({ ...rows[0], items });
+  res.json({ ...stripBill(rows[0]), items });
 });
 
 // POST /purchases  { po_no, supplier_id, date, notes, items: [...] }
 router.post("/", async (req, res) => {
-  const { po_no, supplier_id, date, notes, amount_paid = 0, items = [] } = req.body || {};
+  const { po_no, supplier_id, date, notes, amount_paid = 0, items = [], bill_image, bill_amount } = req.body || {};
   if (!po_no) return res.status(400).json({ error: "PO number required" });
 
   const total = items.reduce((t, it) => t + (Number(it.qty) || 0) * (Number(it.unit_cost) || 0), 0);
@@ -54,9 +94,10 @@ router.post("/", async (req, res) => {
   try {
     await client.query("BEGIN");
     const { rows } = await client.query(
-      `INSERT INTO purchase_orders (po_no, supplier_id, date, notes, total, amount_paid, created_by)
-       VALUES ($1, $2, COALESCE($3, CURRENT_DATE), $4, $5, $6, $7) RETURNING *`,
-      [po_no, supplier_id || null, date || null, notes || null, total, Number(amount_paid) || 0, req.user.name]
+      `INSERT INTO purchase_orders (po_no, supplier_id, date, notes, total, amount_paid, created_by, bill_image, bill_amount)
+       VALUES ($1, $2, COALESCE($3, CURRENT_DATE), $4, $5, $6, $7, $8, $9) RETURNING *`,
+      [po_no, supplier_id || null, date || null, notes || null, total, Number(amount_paid) || 0, req.user.name,
+       bill_image || null, bill_amount === undefined || bill_amount === "" ? null : Number(bill_amount) || 0]
     );
     const po = rows[0];
     for (const it of items) {
@@ -198,4 +239,31 @@ router.delete("/:id", requireDeletePermission, async (req, res) => {
   res.status(204).end();
 });
 
+// PUT /purchases/:id/bill — attach or replace the supplier's bill photo
+// and what the paper says the total is.
+router.put("/:id/bill", async (req, res) => {
+  const { bill_image, bill_amount } = req.body || {};
+  const { rows: before } = await pool.query("SELECT * FROM purchase_orders WHERE id = $1", [req.params.id]);
+  if (!before[0]) return res.status(404).json({ error: "Not found" });
+
+  const { rows } = await pool.query(
+    `UPDATE purchase_orders
+        SET bill_image = $1,
+            bill_amount = $2,
+            updated_at = now()
+      WHERE id = $3 RETURNING *`,
+    [
+      bill_image === undefined ? before[0].bill_image : (bill_image || null),
+      bill_amount === undefined || bill_amount === "" ? before[0].bill_amount : Number(bill_amount) || 0,
+      req.params.id,
+    ]
+  );
+  await logChanges({
+    resource: "purchases", recordId: req.params.id, recordLabel: before[0].po_no || "",
+    before: before[0], after: rows[0], user: req.user, columns: ["bill_image", "bill_amount"],
+  });
+  res.json(stripBill({ ...rows[0], has_bill: rows[0].bill_image !== null }));
+});
+
 module.exports = router;
+module.exports.billRouter = billRouter;

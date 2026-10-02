@@ -412,3 +412,37 @@ CREATE INDEX IF NOT EXISTS idx_orders_sold_by ON orders (sold_by);
 -- New bills record the inventory ids outright, which removes the guess.
 -- [{ id, name, qty, price }]
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS items JSONB;
+
+-- Supplier ka asli bill, purchase order ke saath. Stock aane par kaghaz
+-- ka bill gum ho jata hai; tasveer app mein rehti hai aur app ka total
+-- us se milaya ja sakta hai.
+ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS bill_image TEXT;
+ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS bill_amount NUMERIC;
+
+-- Maal wholesaler ko wapis. Ek alag record, kyunki yeh na sale hai na
+-- kharid — stock kam hota hai aur supplier se paisa ya credit milta hai.
+CREATE TABLE IF NOT EXISTS supplier_returns (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  ref_no TEXT,
+  supplier_id UUID REFERENCES suppliers(id),
+  supplier_name TEXT,
+  date DATE NOT NULL DEFAULT CURRENT_DATE,
+  reason TEXT,
+  notes TEXT,
+  total NUMERIC NOT NULL DEFAULT 0,
+  refund_amount NUMERIC NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'Pending',
+  created_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS supplier_return_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  return_id UUID NOT NULL REFERENCES supplier_returns(id) ON DELETE CASCADE,
+  inventory_id UUID REFERENCES inventory(id),
+  name TEXT NOT NULL,
+  sku TEXT,
+  qty NUMERIC NOT NULL DEFAULT 0,
+  unit_cost NUMERIC NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_supplier_return_items_parent ON supplier_return_items (return_id);

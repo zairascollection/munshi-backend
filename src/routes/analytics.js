@@ -211,6 +211,10 @@ async function buildAnalytics({ from, to }) {
       cac: delivered.length > 0 && adSpend > 0 ? Math.round(adSpend / delivered.length) : null,
       cashCollected: round(cashCollected),
     },
+    // Computed above and, until now, silently dropped — the Profit
+    // tracker reads daily.length, so a missing array took the whole app
+    // down to a blank screen the moment the tab was opened.
+    daily,
     byCity: group((o) => o.city),
     byCourier: group((o) => o.courier),
     byChannel: group((o) => o.channel || (o.source === "woocommerce" ? "Website" : "Manual / POS")),

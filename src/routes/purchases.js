@@ -29,7 +29,15 @@ router.get("/:id", async (req, res) => {
   );
   if (!rows[0]) return res.status(404).json({ error: "Not found" });
   const { rows: items } = await pool.query(
-    "SELECT * FROM purchase_order_items WHERE po_id = $1 ORDER BY name",
+    // The product photo comes along, so a purchase order can be checked
+    // against what actually arrived by sight rather than by SKU.
+    `SELECT poi.*,
+            CASE WHEN inv.image IS NOT NULL
+                 THEN '/inventory/' || inv.id::text || '/image?v=' || EXTRACT(EPOCH FROM inv.updated_at)::bigint::text
+                 ELSE NULL END AS image_url
+       FROM purchase_order_items poi
+       LEFT JOIN inventory inv ON inv.id = poi.inventory_id
+      WHERE poi.po_id = $1 ORDER BY poi.name`,
     [req.params.id]
   );
   res.json({ ...rows[0], items });

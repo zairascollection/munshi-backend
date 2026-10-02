@@ -90,8 +90,47 @@ router.get("/monthly", requireAuth, requireResourceAccess("finance"), async (req
       [monthStart, actualEnd]
     );
 
+    // Baqaya — money billed this month that has not come in yet. A sheet
+    // that only shows profit hides the fact that part of it is still on
+    // the street, which is exactly what a shopkeeper needs to chase.
+    const { rows: unpaidRows } = await pool.query(
+      `SELECT id, order_no, customer, phone, date, due_date, sell, amount_paid, status,
+              (sell - amount_paid) AS due
+         FROM orders
+        WHERE date >= $1 AND date <= $2
+          AND status <> 'Returned'
+          AND (sell - amount_paid) > 0
+        ORDER BY (sell - amount_paid) DESC`,
+      [monthStart, actualEnd]
+    );
+    const customerDue = unpaidRows.reduce((t, r) => t + parseFloat(r.due || 0), 0);
+
+    // Wages still owed to staff.
+    const { rows: unpaidSalaryRow } = await pool.query(
+      `SELECT COALESCE(SUM(salary), 0) AS pending_salary, COUNT(*) AS people
+         FROM employees WHERE status = 'Pending'`
+    );
+    const pendingSalary = parseFloat(unpaidSalaryRow[0].pending_salary || 0);
+
     res.json({
       month,
+      // Everything still outstanding, in one place.
+      pending: {
+        customers: {
+          count: unpaidRows.length,
+          amount: Math.round(customerDue * 100) / 100,
+          orders: unpaidRows.map((r) => ({
+            id: r.id, orderNo: r.order_no, customer: r.customer, phone: r.phone,
+            date: r.date, dueDate: r.due_date, status: r.status,
+            sell: parseFloat(r.sell || 0), amountPaid: parseFloat(r.amount_paid || 0),
+            due: parseFloat(r.due || 0),
+          })),
+        },
+        commissions: pendingCommission,
+        salaries: pendingSalary,
+        salaryPeople: parseInt(unpaidSalaryRow[0].people || 0, 10),
+        total: Math.round((customerDue + pendingCommission + pendingSalary) * 100) / 100,
+      },
       summary: {
         totalRevenue,
         totalCost,
@@ -176,9 +215,50 @@ async function generateMonthlySheet(month) {
     [from, to]
   );
 
+  // Baqaya — billed this month but not yet collected, plus wages and
+  // commissions still owed. A sheet that shows only profit hides how much
+  // of it is still out on the street, which is the first thing a
+  // shopkeeper needs to chase at month end.
+  const { rows: unpaid } = await pool.query(
+    `SELECT id, order_no, customer, phone, date, due_date, status,
+            sell, amount_paid, (sell - amount_paid) AS due
+       FROM orders
+      WHERE date >= $1 AND date <= $2
+        AND status <> 'Returned'
+        AND (sell - amount_paid) > 0
+      ORDER BY (sell - amount_paid) DESC`,
+    [from, to]
+  );
+  const { rows: owedRow } = await pool.query(
+    `SELECT
+       (SELECT COALESCE(SUM(salary),0) FROM employees WHERE status = 'Pending')      AS salaries,
+       (SELECT COUNT(*) FROM employees WHERE status = 'Pending')                     AS salary_people,
+       (SELECT COALESCE(SUM(commission),0) FROM affiliates WHERE payment = 'Pending') AS commissions`
+  );
+  const customerDue = unpaid.reduce((t, r) => t + Number(r.due || 0), 0);
+  const owedSalaries = Number(owedRow[0].salaries || 0);
+  const owedCommissions = Number(owedRow[0].commissions || 0);
+
   const sheet = {
     ...analytics,
     month,
+    pending: {
+      customers: {
+        count: unpaid.length,
+        amount: Math.round(customerDue),
+        orders: unpaid.map((r) => ({
+          id: r.id, orderNo: r.order_no, customer: r.customer, phone: r.phone,
+          date: r.date, dueDate: r.due_date, status: r.status,
+          sell: Number(r.sell || 0), amountPaid: Number(r.amount_paid || 0),
+          due: Number(r.due || 0),
+        })),
+      },
+      salaries: Math.round(owedSalaries),
+      salaryPeople: Number(owedRow[0].salary_people || 0),
+      commissions: Math.round(owedCommissions),
+      totalOwedToUs: Math.round(customerDue),
+      totalWeOwe: Math.round(owedSalaries + owedCommissions),
+    },
     stock: {
       invested: Number(stockRow[0].invested),
       retailValue: Number(stockRow[0].retail),

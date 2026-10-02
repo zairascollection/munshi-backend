@@ -66,7 +66,10 @@ router.get("/", async (req, res) => {
             COALESCE(i.total_out, 0)        AS total_out,
             COALESCE(i.total_returned, 0)   AS total_returned,
             COALESCE(i.total_sold, 0)       AS total_sold,
-            COALESCE(i.value_out, 0)        AS value_out
+            COALESCE(i.value_out, 0)        AS value_out,
+            -- Up to three product photos, so a row is recognisable at a
+            -- glance instead of being read off a reference number.
+            COALESCE(p.images, '{}')        AS item_images
        FROM consignments c
        LEFT JOIN affiliates a ON a.id = c.affiliate_id
        LEFT JOIN (
@@ -78,6 +81,15 @@ router.get("/", async (req, res) => {
                 SUM((qty_out - qty_returned - qty_sold) * unit_price) AS value_out
            FROM consignment_items GROUP BY consignment_id
        ) i ON i.consignment_id = c.id
+       LEFT JOIN (
+         SELECT consignment_id,
+                ARRAY_AGG('/inventory/' || inv.id::text || '/image?v=' ||
+                          EXTRACT(EPOCH FROM inv.updated_at)::bigint::text
+                          ORDER BY ci.created_at) AS images
+           FROM consignment_items ci
+           JOIN inventory inv ON inv.id = ci.inventory_id AND inv.image IS NOT NULL
+          GROUP BY consignment_id
+       ) p ON p.consignment_id = c.id
       ORDER BY c.date DESC, c.created_at DESC`
   );
   res.json(rows.map((r) => ({
@@ -87,6 +99,7 @@ router.get("/", async (req, res) => {
     total_sold: Number(r.total_sold),
     value_out: Number(r.value_out),
     remaining: Number(r.total_out) - Number(r.total_returned) - Number(r.total_sold),
+    item_images: (r.item_images || []).slice(0, 3),
   })));
 });
 

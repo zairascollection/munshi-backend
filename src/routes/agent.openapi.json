@@ -1,0 +1,596 @@
+{
+ "openapi": "3.0.3",
+ "info": {
+  "title": "Munshi Agent API",
+  "version": "1.0.0",
+  "description": "Zaira's Collection ke AI agent ke liye. Auth: Authorization: Bearer <AGENT_API_KEY>. Likhne wale endpoints sirf tab chalte hain jab server par AGENT_API_WRITE=1 ho. Edit/delete endpoints maujood nahi."
+ },
+ "servers": [
+  {
+   "url": "https://REPLACE-WITH-BACKEND-DOMAIN/api/agent"
+  }
+ ],
+ "security": [
+  {
+   "bearer": []
+  }
+ ],
+ "components": {
+  "securitySchemes": {
+   "bearer": {
+    "type": "http",
+    "scheme": "bearer"
+   }
+  }
+ },
+ "paths": {
+  "/ping": {
+   "get": {
+    "summary": "Key theek hai? Writes on hain?",
+    "description": "",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "OK"
+     },
+     "401": {
+      "description": "Galat key"
+     }
+    }
+   }
+  },
+  "/summary": {
+   "get": {
+    "summary": "Aaj/mahine ki sales, profit, kharch, udhaar, balance, low stock",
+    "description": "",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "OK"
+     },
+     "401": {
+      "description": "Galat key"
+     }
+    }
+   }
+  },
+  "/accounts": {
+   "get": {
+    "summary": "Cash/Bank accounts aur balance (sale/payment ke liye account_id yahin se)",
+    "description": "",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "OK"
+     },
+     "401": {
+      "description": "Galat key"
+     }
+    }
+   }
+  },
+  "/inventory": {
+   "get": {
+    "summary": "Stock list",
+    "description": "",
+    "parameters": [
+     {
+      "name": "q",
+      "in": "query",
+      "required": false,
+      "description": "naam/SKU se talash",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "low",
+      "in": "query",
+      "required": false,
+      "description": "1 = sirf low stock",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "description": "max 500",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "OK"
+     },
+     "401": {
+      "description": "Galat key"
+     }
+    }
+   }
+  },
+  "/orders": {
+   "get": {
+    "summary": "Orders / bills",
+    "description": "",
+    "parameters": [
+     {
+      "name": "status",
+      "in": "query",
+      "required": false,
+      "description": "Pending/Shipped/Delivered/Returned",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "from",
+      "in": "query",
+      "required": false,
+      "description": "YYYY-MM-DD",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "to",
+      "in": "query",
+      "required": false,
+      "description": "YYYY-MM-DD",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "customer",
+      "in": "query",
+      "required": false,
+      "description": "naam ya phone",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "unpaid",
+      "in": "query",
+      "required": false,
+      "description": "1 = sirf baqaya wale",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "description": "max 500",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "OK"
+     },
+     "401": {
+      "description": "Galat key"
+     }
+    }
+   }
+  },
+  "/customers": {
+   "get": {
+    "summary": "Customer khata: kis ka kitna udhaar",
+    "description": "",
+    "parameters": [
+     {
+      "name": "q",
+      "in": "query",
+      "required": false,
+      "description": "naam ya phone",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "owing",
+      "in": "query",
+      "required": false,
+      "description": "1 = sirf jin ka baqaya hai",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "description": "max 500",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "OK"
+     },
+     "401": {
+      "description": "Galat key"
+     }
+    }
+   }
+  },
+  "/payments": {
+   "get": {
+    "summary": "Udhaar ki wasooli ki history",
+    "description": "",
+    "parameters": [
+     {
+      "name": "from",
+      "in": "query",
+      "required": false,
+      "description": "YYYY-MM-DD",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "to",
+      "in": "query",
+      "required": false,
+      "description": "YYYY-MM-DD",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "order_id",
+      "in": "query",
+      "required": false,
+      "description": "uuid",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "OK"
+     },
+     "401": {
+      "description": "Galat key"
+     }
+    }
+   }
+  },
+  "/consignments": {
+   "get": {
+    "summary": "Affiliates ke paas maal",
+    "description": "",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "OK"
+     },
+     "401": {
+      "description": "Galat key"
+     }
+    }
+   }
+  },
+  "/sale": {
+   "post": {
+    "summary": "Nayi sale/bill likho",
+    "description": "Stock ghatata hai, paid raqam account mein jorta hai, website stock push karta hai. Stock kam ho to 400.",
+    "parameters": [
+     {
+      "name": "Idempotency-Key",
+      "in": "header",
+      "required": true,
+      "description": "Har naye kaam ke liye nayi random key (8-100 chars). Wohi key dobara bhejne par dobara entry NAHI banti.",
+      "schema": {
+       "type": "string",
+       "minLength": 8,
+       "maxLength": 100
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "customer",
+         "items",
+         "status"
+        ],
+        "properties": {
+         "customer": {
+          "type": "string"
+         },
+         "phone": {
+          "type": "string"
+         },
+         "city": {
+          "type": "string"
+         },
+         "items": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+           "type": "object",
+           "required": [
+            "inventory_id",
+            "qty"
+           ],
+           "properties": {
+            "inventory_id": {
+             "type": "string",
+             "format": "uuid"
+            },
+            "qty": {
+             "type": "integer",
+             "minimum": 1
+            },
+            "price": {
+             "type": "number",
+             "description": "Na do to inventory ki price"
+            }
+           }
+          }
+         },
+         "status": {
+          "type": "string",
+          "enum": [
+           "Pending",
+           "Shipped",
+           "Delivered"
+          ]
+         },
+         "amount_paid": {
+          "type": "number",
+          "default": 0
+         },
+         "account_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "amount_paid > 0 ho to lazmi"
+         },
+         "method": {
+          "type": "string"
+         },
+         "due_date": {
+          "type": "string",
+          "format": "date"
+         },
+         "channel": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "201": {
+      "description": "Ho gaya"
+     },
+     "400": {
+      "description": "Data galat ya stock kam"
+     },
+     "403": {
+      "description": "Writes band (AGENT_API_WRITE)"
+     },
+     "422": {
+      "description": "Idempotency-Key kisi aur request ki"
+     }
+    }
+   }
+  },
+  "/payment": {
+   "post": {
+    "summary": "Udhaar ki wasooli likho",
+    "description": "Order ka baqaya kam karta hai, account balance barhata hai. Baqaye se zyada nahi le sakte.",
+    "parameters": [
+     {
+      "name": "Idempotency-Key",
+      "in": "header",
+      "required": true,
+      "description": "Har naye kaam ke liye nayi random key (8-100 chars). Wohi key dobara bhejne par dobara entry NAHI banti.",
+      "schema": {
+       "type": "string",
+       "minLength": 8,
+       "maxLength": 100
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "order_id",
+         "amount",
+         "account_id"
+        ],
+        "properties": {
+         "order_id": {
+          "type": "string",
+          "format": "uuid"
+         },
+         "amount": {
+          "type": "number"
+         },
+         "account_id": {
+          "type": "string",
+          "format": "uuid"
+         },
+         "method": {
+          "type": "string"
+         },
+         "date": {
+          "type": "string",
+          "format": "date"
+         },
+         "note": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "201": {
+      "description": "Ho gaya"
+     },
+     "400": {
+      "description": "Data galat ya stock kam"
+     },
+     "403": {
+      "description": "Writes band (AGENT_API_WRITE)"
+     },
+     "422": {
+      "description": "Idempotency-Key kisi aur request ki"
+     }
+    }
+   }
+  },
+  "/stock-adjust": {
+   "post": {
+    "summary": "Stock theek karo (+/-)",
+    "description": "Wajah (reason) lazmi. Stock manfi nahi ho sakta.",
+    "parameters": [
+     {
+      "name": "Idempotency-Key",
+      "in": "header",
+      "required": true,
+      "description": "Har naye kaam ke liye nayi random key (8-100 chars). Wohi key dobara bhejne par dobara entry NAHI banti.",
+      "schema": {
+       "type": "string",
+       "minLength": 8,
+       "maxLength": 100
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "inventory_id",
+         "delta",
+         "reason"
+        ],
+        "properties": {
+         "inventory_id": {
+          "type": "string",
+          "format": "uuid"
+         },
+         "delta": {
+          "type": "integer",
+          "description": "+5 ya -2"
+         },
+         "reason": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "201": {
+      "description": "Ho gaya"
+     },
+     "400": {
+      "description": "Data galat ya stock kam"
+     },
+     "403": {
+      "description": "Writes band (AGENT_API_WRITE)"
+     },
+     "422": {
+      "description": "Idempotency-Key kisi aur request ki"
+     }
+    }
+   }
+  },
+  "/expense": {
+   "post": {
+    "summary": "Kharcha likho",
+    "description": "account_id do to account se raqam kat jati hai.",
+    "parameters": [
+     {
+      "name": "Idempotency-Key",
+      "in": "header",
+      "required": true,
+      "description": "Har naye kaam ke liye nayi random key (8-100 chars). Wohi key dobara bhejne par dobara entry NAHI banti.",
+      "schema": {
+       "type": "string",
+       "minLength": 8,
+       "maxLength": 100
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "title",
+         "amount"
+        ],
+        "properties": {
+         "title": {
+          "type": "string"
+         },
+         "category": {
+          "type": "string"
+         },
+         "amount": {
+          "type": "number"
+         },
+         "account_id": {
+          "type": "string",
+          "format": "uuid"
+         },
+         "date": {
+          "type": "string",
+          "format": "date"
+         }
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "201": {
+      "description": "Ho gaya"
+     },
+     "400": {
+      "description": "Data galat ya stock kam"
+     },
+     "403": {
+      "description": "Writes band (AGENT_API_WRITE)"
+     },
+     "422": {
+      "description": "Idempotency-Key kisi aur request ki"
+     }
+    }
+   }
+  }
+ }
+}

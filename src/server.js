@@ -91,7 +91,7 @@ app.use(express.json({ limit: "60mb" }));
 // Bumped by hand with each shipped change. Open this in a browser to see
 // at a glance whether a deploy actually took — guessing at that has cost
 // real time more than once.
-const BUILD = "2026-10-02b-returns-and-bills";
+const BUILD = "2026-10-12-agent-api";
 app.get("/version", (req, res) => {
   const status = app.get("featureStatus") || { mounted: [], failed: [] };
   res.json({
@@ -157,6 +157,9 @@ const FEATURES = [
   ["/backup", "./routes/backup"],
   ["/whatsapp", "./routes/whatsapp"],
   ["/supplier-returns", "./routes/supplierReturns"],
+  // Personal AI agent. Off unless AGENT_API_KEY is set; read-only unless
+  // AGENT_API_WRITE=1. See routes/agent.js.
+  ["/api/agent", "./routes/agent"],
 ];
 
 // The supplier bill photo is served without a token, like inventory

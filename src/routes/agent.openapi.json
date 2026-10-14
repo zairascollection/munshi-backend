@@ -591,6 +591,65 @@
      }
     }
    }
+  },
+  "/inventory-rename": {
+   "post": {
+    "summary": "Item ka naam aur/ya SKU badlo",
+    "description": "Sirf naam/SKU badalta hai; stock, qeemat, tasveer aur website ka link wahi rehte hain. SKU kisi aur item ka na ho.",
+    "parameters": [
+     {
+      "name": "Idempotency-Key",
+      "in": "header",
+      "required": true,
+      "description": "Har naye kaam ke liye nayi random key (8-100 chars). Wohi key dobara bhejne par dobara entry NAHI banti.",
+      "schema": {
+       "type": "string",
+       "minLength": 8,
+       "maxLength": 100
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "inventory_id"
+        ],
+        "properties": {
+         "inventory_id": {
+          "type": "string"
+         },
+         "name": {
+          "type": "string",
+          "maxLength": 150
+         },
+         "sku": {
+          "type": "string",
+          "maxLength": 64
+         }
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "201": {
+      "description": "Ho gaya"
+     },
+     "400": {
+      "description": "Data galat ya stock kam"
+     },
+     "403": {
+      "description": "Writes band (AGENT_API_WRITE)"
+     },
+     "422": {
+      "description": "Idempotency-Key kisi aur request ki"
+     }
+    }
+   }
   }
  }
 }

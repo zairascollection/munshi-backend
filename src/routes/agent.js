@@ -463,6 +463,44 @@ router.post("/stock-adjust", ...writeEndpoint("stock-adjust", async (client, b) 
   };
 }));
 
+// POST /inventory-rename  { inventory_id, name?, sku? }
+// Sirf naam aur/ya SKU badalta hai. Stock, qeemat, tasveer aur website ka link (wc_product_id) wahi rehte hain.
+router.post("/inventory-rename", ...writeEndpoint("inventory-rename", async (client, b) => {
+  if (!isUuid(b.inventory_id)) throw bad("inventory_id galat hai");
+  const name = b.name === undefined ? undefined : text(b.name, 150);
+  const sku = b.sku === undefined ? undefined : text(b.sku, 64);
+  if (name === undefined && sku === undefined) throw bad("name ya sku mein se kam az kam ek do");
+  if (name === null) throw bad("name khali nahi ho sakta");
+  if (sku !== undefined && (sku === null || !/^[A-Za-z0-9._-]+$/.test(sku))) {
+    throw bad("sku mein sirf huroof, number, - . _ ho sakte hain (space nahi)");
+  }
+
+  const { rows: [before] } = await client.query("SELECT * FROM inventory WHERE id = $1 FOR UPDATE", [b.inventory_id]);
+  if (!before) throw new ApiError(404, "Item nahi mila");
+  if (sku !== undefined) {
+    const { rows: clash } = await client.query(
+      "SELECT name FROM inventory WHERE lower(sku) = lower($1) AND id <> $2 LIMIT 1", [sku, before.id]
+    );
+    if (clash[0]) throw bad(`Ye SKU pehle se kisi aur item (${clash[0].name}) ka hai`);
+  }
+  const newName = name === undefined ? before.name : name;
+  const newSku = sku === undefined ? before.sku : sku;
+  if (newName === before.name && newSku === before.sku) throw bad("Kuch badla nahi (naam aur SKU pehle jaise hi hain)");
+
+  const { rows: [after] } = await client.query(
+    "UPDATE inventory SET name = $1, sku = $2, updated_at = now() WHERE id = $3 RETURNING *",
+    [newName, newSku, before.id]
+  );
+  return {
+    status: 201,
+    body: { ok: true, name_before: before.name, name_after: after.name, sku_before: before.sku, sku_after: after.sku },
+    after: () => logChanges({
+      resource: "inventory", recordId: before.id, recordLabel: `${before.name} (naam/SKU tabdeel)`,
+      before, after, user: AGENT_USER, columns: ["name", "sku"],
+    }),
+  };
+}));
+
 // POST /expense  { title, category?, amount, account_id?, date? }
 router.post("/expense", ...writeEndpoint("expense", async (client, b) => {
   const title = text(b.title, 150);

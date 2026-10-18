@@ -300,6 +300,90 @@ router.get("/consignments", wrap(async (req, res) => {
   res.json(rows);
 }));
 
+// ---- business reads: employees, affiliates, expenses, ads, suppliers, purchases, settings, profit
+const money = (rows, keys) => rows.map((r) => { const o = { ...r }; keys.forEach((k) => { if (k in o) o[k] = Number(o[k]); }); return o; });
+
+router.get("/employees", wrap(async (req, res) => {
+  const { rows } = await pool.query("SELECT id, name, role, salary, phone, joined, status FROM employees ORDER BY name");
+  res.json(money(rows, ["salary"]));
+}));
+
+router.get("/affiliates", wrap(async (req, res) => {
+  const { rows } = await pool.query(
+    "SELECT id, name, platform, rate, sales, commission, status, payment FROM affiliates ORDER BY name"
+  );
+  res.json(money(rows, ["rate", "sales", "commission"]));
+}));
+
+router.get("/expenses", wrap(async (req, res) => {
+  const where = [];
+  const vals = [];
+  const { from, to } = req.query;
+  if (from) { if (!isDate(from)) throw bad("from: YYYY-MM-DD"); vals.push(from); where.push(`e.date >= $${vals.length}`); }
+  if (to) { if (!isDate(to)) throw bad("to: YYYY-MM-DD"); vals.push(to); where.push(`e.date <= $${vals.length}`); }
+  if (req.query.q) { vals.push(`%${String(req.query.q).toLowerCase()}%`); where.push(`(lower(e.title) LIKE $${vals.length} OR lower(COALESCE(e.category,'')) LIKE $${vals.length})`); }
+  const { rows } = await pool.query(
+    `SELECT e.id, e.title, e.category, e.amount, e.date, a.name AS account
+       FROM expenses e LEFT JOIN accounts a ON a.id = e.account_id
+      ${where.length ? "WHERE " + where.join(" AND ") : ""}
+      ORDER BY e.date DESC, e.created_at DESC LIMIT ${limitOf(req.query.limit)}`,
+    vals
+  );
+  res.json(money(rows, ["amount"]));
+}));
+
+router.get("/ad-spend", wrap(async (req, res) => {
+  const where = [];
+  const vals = [];
+  const { from, to } = req.query;
+  if (from) { if (!isDate(from)) throw bad("from: YYYY-MM-DD"); vals.push(from); where.push(`date >= $${vals.length}`); }
+  if (to) { if (!isDate(to)) throw bad("to: YYYY-MM-DD"); vals.push(to); where.push(`date <= $${vals.length}`); }
+  const { rows } = await pool.query(
+    `SELECT id, date, channel, campaign, amount, notes FROM ad_spend
+      ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY date DESC LIMIT ${limitOf(req.query.limit)}`,
+    vals
+  );
+  res.json(money(rows, ["amount"]));
+}));
+
+router.get("/suppliers", wrap(async (req, res) => {
+  const { rows } = await pool.query("SELECT id, name, contact_person, phone, city FROM suppliers ORDER BY name");
+  res.json(rows);
+}));
+
+router.get("/purchase-orders", wrap(async (req, res) => {
+  const vals = [];
+  let where = "";
+  if (req.query.status) { vals.push(req.query.status); where = `WHERE p.status = $1`; }
+  const { rows } = await pool.query(
+    `SELECT p.id, p.po_no, p.date, p.status, p.total, p.amount_paid, s.name AS supplier,
+            GREATEST(p.total - p.amount_paid, 0) AS due
+       FROM purchase_orders p LEFT JOIN suppliers s ON s.id = p.supplier_id
+       ${where} ORDER BY p.date DESC LIMIT ${limitOf(req.query.limit)}`,
+    vals
+  );
+  res.json(money(rows, ["total", "amount_paid", "due"]));
+}));
+
+// Cost settings only (delivery, return, packaging, cash handling, tax) — nothing secret lives here.
+router.get("/settings", wrap(async (req, res) => {
+  const keys = ["default_delivery_charge", "default_return_charge", "cash_handling_pct", "tax_pct", "packaging_cost"];
+  const { rows } = await pool.query("SELECT key, value FROM settings WHERE key = ANY($1)", [keys]);
+  res.json(Object.fromEntries(rows.map((r) => [r.key, Number(r.value) || 0])));
+}));
+
+// The same profit engine the Munshi analytics screen uses, so the agent and the app can never disagree.
+router.get("/analytics", wrap(async (req, res) => {
+  const { from, to } = req.query;
+  if (!isDate(from) || !isDate(to)) throw bad("from aur to (YYYY-MM-DD) dono chahiye");
+  if (new Date(to) < new Date(from) || (new Date(to) - new Date(from)) / 864e5 > 400) throw bad("Muddat 400 din se zyada ya ulti nahi ho sakti");
+  const { buildAnalytics } = require("./analytics");
+  const a = await buildAnalytics({ from, to });
+  // keep the answer small: the long per-day / per-city tables are not needed by the agent
+  const { daily, byCity, byCourier, byStaff, ...rest } = a;
+  res.json({ ...rest, byCity: byCity.slice(0, 8), byProduct: rest.byProduct.slice(0, 15) });
+}));
+
 // ---------------------------------------------------------------
 // WRITE endpoints
 // ---------------------------------------------------------------
